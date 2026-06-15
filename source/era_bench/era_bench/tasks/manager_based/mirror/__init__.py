@@ -13,7 +13,7 @@ from . import agents
 
 
 gym.register(
-    id="Template-Era-Bench-v0",
+    id="Mirror-Era-Bench-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={

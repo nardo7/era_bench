@@ -4,18 +4,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import MISSING
-import math
 
-import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
-from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
-from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import (
     FRAME_MARKER_CFG,
@@ -23,58 +19,17 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import (
     OffsetCfg,
     VisualizationMarkersCfg,
 )
-from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-from isaaclab_assets.robots.franka import FRANKA_PANDA_CFG  # isort: skip
-import random
+
+
+from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
+from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 
 from . import mdp
+from .scene_cfg import EraBenchSceneCfg
 
 ##
 # Scene definition
 ##
-
-
-@configclass
-class EraBenchSceneCfg(InteractiveSceneCfg):
-    """Configuration for a cart-pole scene."""
-
-    # robots: will be populated by agent env cfg
-    robot: ArticulationCfg = FRANKA_PANDA_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")  # type: ignore
-    # end-effector sensor: will be populated by agent env cfg
-    ee_frame: FrameTransformerCfg = MISSING  # pyright: ignore[reportAssignmentType]
-
-    # Table
-    table = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Table",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.5, 0, 0), rot=(0.707, 0, 0, 0.707)),
-        spawn=UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd"),
-    )
-
-    # plane
-    plane = AssetBaseCfg(
-        prim_path="/World/GroundPlane",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0, 0, -1.05)),
-        spawn=GroundPlaneCfg(),
-    )
-
-    # lights
-    light = AssetBaseCfg(
-        prim_path="/World/light",
-        spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
-    )
-
-    line_name = "line"
-    line = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/" + line_name,
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.5, 0, 0.02)),
-        spawn=UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Lines/line_1m.usd"),
-    )
-
-    objects_amount = random.randint(3, 6)
-    object_names = [f"cube_{i}" for i in range(objects_amount)]
-
-    # def __post_init__(self) -> None:
 
 
 ##
@@ -86,8 +41,18 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    joint_effort = mdp.JointEffortActionCfg(asset_name="robot", joint_names=["slider_to_cart"], scale=100.0)
-    gripper_action: mdp.BinaryJointPositionActionCfg = MISSING  # pyright: ignore[reportAssignmentType]
+    arm_actions = DifferentialInverseKinematicsActionCfg(
+        asset_name="robot",
+        joint_names=["panda_joint.*"],
+        body_name="panda_hand",
+        controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
+    )
+    gripper_action: mdp.BinaryJointPositionActionCfg = mdp.BinaryJointPositionActionCfg(
+        asset_name="robot",
+        joint_names=["panda_finger.*"],
+        open_command_expr={"panda_finger_.*": 0.04},
+        close_command_expr={"panda_finger_.*": 0.0},
+    )
 
 
 @configclass
@@ -108,6 +73,13 @@ class ObservationsCfg:
         eef_quat = ObsTerm(func=mdp.ee_frame_quat)
         gripper_pos = ObsTerm(func=mdp.gripper_pos)
 
+        table_cam = ObsTerm(
+            func=mdp.image, params={"sensor_cfg": SceneEntityCfg("table_cam"), "data_type": "rgb", "normalize": False}
+        )
+        wrist_cam = ObsTerm(
+            func=mdp.image, params={"sensor_cfg": SceneEntityCfg("wrist_cam"), "data_type": "rgb", "normalize": False}
+        )
+
         def __post_init__(self) -> None:
             self.enable_corruption = False
             self.concatenate_terms = False
@@ -116,12 +88,9 @@ class ObservationsCfg:
     class SubTasksCfg(ObsGroup):
         """Observations for sub-task groups."""
 
-        object_names: list[str] = []
-
         object_grasped = ObsTerm(
             func=mdp.objects_grasped,
             params={
-                "object_cfg": [SceneEntityCfg(name) for name in object_names],
                 "robot_cfg": SceneEntityCfg("robot"),
                 "ee_frame_cfg": SceneEntityCfg("ee_frame"),
             },
@@ -129,7 +98,6 @@ class ObservationsCfg:
         object_placed = ObsTerm(
             func=mdp.objects_placed,
             params={
-                "object_cfg": [SceneEntityCfg(name) for name in object_names],
                 "robot_cfg": SceneEntityCfg("robot"),
                 "ee_frame_cfg": SceneEntityCfg("ee_frame"),
                 "xy_threshold": 0.04,
@@ -146,8 +114,7 @@ class ObservationsCfg:
 class EventCfg:
     """Configuration for events."""
 
-    object_names: list[str] = []
-    line_name: str = "middle_line"
+    # line_name: str = "line"
 
     init_franka_arm_pose = EventTerm(
         func=mdp.set_default_joint_pose,
@@ -187,7 +154,7 @@ class EventCfg:
                 "z": (0.02, 0.02),
                 "yaw": (-1.0, 1.0),
             },
-            "asset_cfgs": [SceneEntityCfg(line_name)],
+            "asset_cfgs": [SceneEntityCfg("line")],
         },
     )
 
@@ -196,8 +163,7 @@ class EventCfg:
         mode="reset",
         params={
             "min_separation": 0.1,
-            "asset_cfgs": [SceneEntityCfg(name) for name in object_names],
-            "line_cfg": SceneEntityCfg(line_name),
+            "line_cfg": SceneEntityCfg("line"),
         },
     )
 
@@ -224,9 +190,6 @@ class TerminationsCfg:
 
 @configclass
 class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
-    objects_amount = random.randint(3, 6)
-    object_names = [f"cube_{i}" for i in range(objects_amount)]
-    line_name = "line"
     # Scene settings
     scene: EraBenchSceneCfg = EraBenchSceneCfg(num_envs=1, env_spacing=4.0)
     # Basic settings
@@ -243,7 +206,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # general settings
         self.decimation = 5
-        self.episode_length_s = 30.0
+        self.episode_length_s = 10.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render_interval = 2
@@ -253,10 +216,6 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
         self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024
         self.sim.physx.friction_correlation_distance = 0.00625
-
-        self.observations.subtasks.object_names = self.object_names
-        self.events.object_names = self.object_names
-        self.events.line_name = self.line_name
 
         if self.scene.robot.spawn is None or self.scene.table.spawn is None:
             return
@@ -300,3 +259,10 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
                 ),
             ],
         )
+
+        # Set settings for camera rendering
+        self.rerender_on_reset = True
+        self.sim.render.antialiasing_mode = "Off"  # disable dlss
+
+        # List of image observations in policy observations
+        self.image_obs_list = ["table_cam", "wrist_cam"]

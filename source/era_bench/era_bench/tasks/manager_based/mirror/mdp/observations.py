@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from era_bench.tasks.manager_based.mirror.scene_cfg import EraBenchSceneCfg
 import torch
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 
 from isaaclab.assets import Articulation, RigidObject, RigidObjectCollection
@@ -12,18 +13,14 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-def ee_frame_pos(
-    env: ManagerBasedRLEnv, ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")
-) -> torch.Tensor:
+def ee_frame_pos(env: ManagerBasedRLEnv, ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")) -> torch.Tensor:
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
     ee_frame_pos = ee_frame.data.target_pos_w[:, 0, :] - env.scene.env_origins[:, 0:3]
 
     return ee_frame_pos
 
 
-def ee_frame_quat(
-    env: ManagerBasedRLEnv, ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")
-) -> torch.Tensor:
+def ee_frame_quat(env: ManagerBasedRLEnv, ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")) -> torch.Tensor:
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
     ee_frame_quat = ee_frame.data.target_quat_w[:, 0, :]
 
@@ -38,7 +35,7 @@ def gripper_pos(
     Obtain the versatile gripper position of both Gripper and Suction Cup.
     """
     robot: Articulation = env.scene[robot_cfg.name]
-
+    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
     if hasattr(env.scene, "surface_grippers") and len(env.scene.surface_grippers) > 0:
         # Handle multiple surface grippers by concatenating their states
         gripper_states = []
@@ -51,24 +48,16 @@ def gripper_pos(
             return torch.cat(gripper_states, dim=1)
 
     else:
-        if hasattr(env.cfg, "gripper_joint_names"):
+        if hasattr(scene_cfg, "gripper_joint_names"):
             gripper_joint_ids, _ = robot.find_joints(
-                env.cfg.gripper_joint_names
+                scene_cfg.gripper_joint_names
             )  # pyright: ignore[reportAttributeAccessIssue]
-            assert (
-                len(gripper_joint_ids) == 2
-            ), "Observation gripper_pos only support parallel gripper for now"
-            finger_joint_1 = (
-                robot.data.joint_pos[:, gripper_joint_ids[0]].clone().unsqueeze(1)
-            )
-            finger_joint_2 = -1 * robot.data.joint_pos[
-                :, gripper_joint_ids[1]
-            ].clone().unsqueeze(1)
+            assert len(gripper_joint_ids) == 2, "Observation gripper_pos only support parallel gripper for now"
+            finger_joint_1 = robot.data.joint_pos[:, gripper_joint_ids[0]].clone().unsqueeze(1)
+            finger_joint_2 = -1 * robot.data.joint_pos[:, gripper_joint_ids[1]].clone().unsqueeze(1)
             return torch.cat((finger_joint_1, finger_joint_2), dim=1)
         else:
-            raise NotImplementedError(
-                "[Error] Cannot find gripper_joint_names in the environment config"
-            )
+            raise NotImplementedError("[Error] Cannot find gripper_joint_names in the environment config")
 
 
 def object_obs(
@@ -100,9 +89,7 @@ def object_obs(
     ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
     gripper_to_cubes = cubes_pos_w - ee_pos_w.unsqueeze(1)
 
-    cubes_pos_w_local = (cubes_pos_w - env.scene.env_origins.unsqueeze(1)).reshape(
-        env.num_envs, -1
-    )
+    cubes_pos_w_local = (cubes_pos_w - env.scene.env_origins.unsqueeze(1)).reshape(env.num_envs, -1)
     cubes_quat_w_flat = cubes_quat_w.reshape(env.num_envs, -1)
     gripper_to_cubes_flat = gripper_to_cubes.reshape(env.num_envs, -1)
 
@@ -140,55 +127,49 @@ def objects_grasped(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     ee_frame_cfg: SceneEntityCfg,
-    object_cfgs: list[SceneEntityCfg],
+    object_cfgs: list[SceneEntityCfg] | None = None,
     diff_threshold: float = 0.06,
 ) -> torch.Tensor:
     """Check if an object is grasped by the specified robot."""
 
     robot: Articulation = env.scene[robot_cfg.name]
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
+    if object_cfgs is None:
+        object_cfgs = [SceneEntityCfg(name) for name in scene_cfg.object_names]
+
     objects: list[RigidObject] = [env.scene[obj_cfg.name] for obj_cfg in object_cfgs]
 
     object_poses = torch.stack([obj.data.root_pos_w for obj in objects], dim=1)
     end_effector_pos = ee_frame.data.target_pos_w[:, 0, :]
-    pose_diff: torch.Tensor = torch.linalg.vector_norm(
-        object_poses - end_effector_pos.unsqueeze(1), dim=2
-    )
+    pose_diff: torch.Tensor = torch.linalg.vector_norm(object_poses - end_effector_pos.unsqueeze(1), dim=2)
 
     if hasattr(env.scene, "surface_grippers") and len(env.scene.surface_grippers) > 0:
         surface_gripper = env.scene.surface_grippers["surface_gripper"]
-        suction_cup_status = surface_gripper.state.view(
-            -1, 1
-        )  # 1: closed, 0: closing, -1: open
+        suction_cup_status = surface_gripper.state.view(-1, 1)  # 1: closed, 0: closing, -1: open
         suction_cup_is_closed = (suction_cup_status == 1).to(torch.float32)
         grasped = torch.logical_and(suction_cup_is_closed, pose_diff < diff_threshold)
 
     else:
-        if hasattr(env.cfg, "gripper_joint_names"):
-            gripper_joint_ids, _ = robot.find_joints(env.cfg.gripper_joint_names)
-            assert (
-                len(gripper_joint_ids) == 2
-            ), "Observations only support parallel gripper for now"
+        if scene_cfg.gripper_joint_names is not None:
+            gripper_joint_ids, _ = robot.find_joints(scene_cfg.gripper_joint_names)
+            assert len(gripper_joint_ids) == 2, "Observations only support parallel gripper for now"
 
             grasped = torch.logical_and(
                 pose_diff < diff_threshold,
                 torch.abs(
                     robot.data.joint_pos[:, gripper_joint_ids[0]]
-                    - torch.tensor(env.cfg.gripper_open_val, dtype=torch.float32).to(
-                        env.device
-                    )
+                    - torch.tensor(scene_cfg.gripper_open_val, dtype=torch.float32).to(env.device)
                 ).unsqueeze(1)
-                > env.cfg.gripper_threshold,
+                > scene_cfg.gripper_threshold,
             )
             grasped = torch.logical_and(
                 grasped,
                 torch.abs(
                     robot.data.joint_pos[:, gripper_joint_ids[1]]
-                    - torch.tensor(env.cfg.gripper_open_val, dtype=torch.float32).to(
-                        env.device
-                    )
+                    - torch.tensor(scene_cfg.gripper_open_val, dtype=torch.float32).to(env.device)
                 ).unsqueeze(1)
-                > env.cfg.gripper_threshold,
+                > scene_cfg.gripper_threshold,
             )
 
     return grasped
@@ -197,7 +178,7 @@ def objects_grasped(
 def objects_placed(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
-    objects_cfg: list[SceneEntityCfg],
+    objects_cfg: list[SceneEntityCfg] | None = None,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
     xy_threshold: float = 0.05,
     height_threshold: float = 0.005,
@@ -207,9 +188,11 @@ def objects_placed(
     """Check if an object is placed, released, and was previously grasped in this episode."""
 
     robot: Articulation = env.scene[robot_cfg.name]
-    upper_objects: list[RigidObject] = [
-        env.scene[obj_cfg.name] for obj_cfg in objects_cfg
-    ]
+    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
+    if objects_cfg is None:
+        objects_cfg = [SceneEntityCfg(name) for name in scene_cfg.object_names]
+
+    upper_objects: list[RigidObject] = [env.scene[obj_cfg.name] for obj_cfg in objects_cfg]
     lower_object: RigidObject = env.scene.table
 
     upper_pos_w = torch.stack([obj.data.root_pos_w for obj in upper_objects], dim=1)
@@ -219,30 +202,22 @@ def objects_placed(
     height_dist = torch.linalg.vector_norm(pos_diff[:, :, 2:], dim=2)
     xy_dist = torch.linalg.vector_norm(pos_diff[:, :, :2], dim=2)
 
-    placed_geom = torch.logical_and(
-        xy_dist < xy_threshold, (height_dist - height_diff) < height_threshold
-    )
+    placed_geom = torch.logical_and(xy_dist < xy_threshold, (height_dist - height_diff) < height_threshold)
 
     if hasattr(env.scene, "surface_grippers") and len(env.scene.surface_grippers) > 0:
         surface_gripper = env.scene.surface_grippers["surface_gripper"]
-        suction_cup_status = surface_gripper.state.view(
-            -1, 1
-        )  # 1: closed, 0: closing, -1: open
+        suction_cup_status = surface_gripper.state.view(-1, 1)  # 1: closed, 0: closing, -1: open
         suction_cup_is_open = (suction_cup_status == -1).to(torch.float32)
         placed = torch.logical_and(suction_cup_is_open, placed_geom)
 
     else:
-        if hasattr(env.cfg, "gripper_joint_names"):
-            gripper_joint_ids, _ = robot.find_joints(env.cfg.gripper_joint_names)
-            assert (
-                len(gripper_joint_ids) == 2
-            ), "Observations only support parallel gripper for now"
+        if hasattr(scene_cfg, "gripper_joint_names"):
+            gripper_joint_ids, _ = robot.find_joints(scene_cfg.gripper_joint_names)
+            assert len(gripper_joint_ids) == 2, "Observations only support parallel gripper for now"
             placed = torch.logical_and(
                 torch.isclose(
                     robot.data.joint_pos[:, gripper_joint_ids[0]],
-                    torch.tensor(env.cfg.gripper_open_val, dtype=torch.float32).to(
-                        env.device
-                    ),
+                    torch.tensor(scene_cfg.gripper_open_val, dtype=torch.float32).to(env.device),
                     atol=1e-4,
                     rtol=1e-4,
                 ),
@@ -251,9 +226,7 @@ def objects_placed(
             placed = torch.logical_and(
                 torch.isclose(
                     robot.data.joint_pos[:, gripper_joint_ids[1]],
-                    torch.tensor(env.cfg.gripper_open_val, dtype=torch.float32).to(
-                        env.device
-                    ),
+                    torch.tensor(scene_cfg.gripper_open_val, dtype=torch.float32).to(env.device),
                     atol=1e-4,
                     rtol=1e-4,
                 ),
@@ -264,9 +237,7 @@ def objects_placed(
 
     # Gate placed on "was grasped in this episode"
     history_attr = "_objects_placed_was_grasped"
-    if (not hasattr(env, history_attr)) or getattr(
-        env, history_attr
-    ).shape != placed.shape:
+    if (not hasattr(env, history_attr)) or getattr(env, history_attr).shape != placed.shape:
         setattr(
             env,
             history_attr,
@@ -280,9 +251,7 @@ def objects_placed(
         was_grasped[reset_env_ids] = False
 
     # Update latch: object is placed only if it was previously grasped
-    currently_grasped = objects_grasped(
-        env, robot_cfg, ee_frame_cfg, objects_cfg, diff_threshold=grasp_diff_threshold
-    )
+    currently_grasped = objects_grasped(env, robot_cfg, ee_frame_cfg, objects_cfg, diff_threshold=grasp_diff_threshold)
     was_grasped |= currently_grasped
 
     return torch.logical_and(placed, was_grasped)

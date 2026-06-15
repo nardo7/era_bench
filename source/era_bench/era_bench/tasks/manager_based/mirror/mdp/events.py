@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import random
 import torch
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from isaacsim.core.utils.extensions import enable_extension
 
@@ -17,6 +17,7 @@ import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, AssetBase
 from isaaclab.managers import SceneEntityCfg
 from .utils import line_direction_xy_from_quat_unnormalized
+from ..scene_cfg import EraBenchSceneCfg
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -30,9 +31,7 @@ def set_default_joint_pose(
 ):
     # Set the default pose for robots in all envs
     asset = env.scene[asset_cfg.name]
-    asset.data.default_joint_pos = torch.tensor(default_pose, device=env.device).repeat(
-        env.num_envs, 1
-    )
+    asset.data.default_joint_pos = torch.tensor(default_pose, device=env.device).repeat(env.num_envs, 1)
 
 
 def randomize_joint_by_gaussian_offset(
@@ -47,9 +46,7 @@ def randomize_joint_by_gaussian_offset(
     # Add gaussian noise to joint states
     joint_pos = asset.data.default_joint_pos[env_ids].clone()
     joint_vel = asset.data.default_joint_vel[env_ids].clone()
-    joint_pos += math_utils.sample_gaussian(
-        mean, std, joint_pos.shape, joint_pos.device
-    )
+    joint_pos += math_utils.sample_gaussian(mean, std, joint_pos.shape, joint_pos.device)
 
     # Clamp joint pos to limits
     joint_pos_limits = asset.data.soft_joint_pos_limits[env_ids]
@@ -85,10 +82,7 @@ def sample_random_color(base=(0.75, 0.75, 0.75), variation=0.1):
     balanced_offsets = [offset - avg_offset for offset in offsets]
 
     # Apply the balanced offsets to the base color and clamp each channel between 0 and 1
-    new_color = tuple(
-        max(0, min(1, base_component + offset))
-        for base_component, offset in zip(base, balanced_offsets)
-    )
+    new_color = tuple(max(0, min(1, base_component + offset)) for base_component, offset in zip(base, balanced_offsets))
 
     return new_color
 
@@ -144,10 +138,7 @@ def sample_object_poses(
     pose_range: dict[str, tuple[float, float]] = {},
     max_sample_tries: int = 5000,
 ):
-    range_list = [
-        pose_range.get(key, (0.0, 0.0))
-        for key in ["x", "y", "z", "roll", "pitch", "yaw"]
-    ]
+    range_list = [pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
     pose_list = []
 
     for i in range(num_objects):
@@ -160,9 +151,7 @@ def sample_object_poses(
                 break
 
             # Check if pose of object is sufficiently far away from all other objects
-            separation_check = [
-                math.dist(sample[:3], pose[:3]) > min_separation for pose in pose_list
-            ]
+            separation_check = [math.dist(sample[:3], pose[:3]) > min_separation for pose in pose_list]
             if False not in separation_check:
                 pose_list.append(sample)
                 break
@@ -201,9 +190,7 @@ def randomize_object_pose(
             # Write pose to simulation
             pose_tensor = torch.tensor([pose_list[i]], device=env.device)
             positions = pose_tensor[:, 0:3] + env.scene.env_origins[cur_env, 0:3]
-            orientations = math_utils.quat_from_euler_xyz(
-                pose_tensor[:, 3], pose_tensor[:, 4], pose_tensor[:, 5]
-            )
+            orientations = math_utils.quat_from_euler_xyz(pose_tensor[:, 3], pose_tensor[:, 4], pose_tensor[:, 5])
             asset.write_root_pose_to_sim(
                 torch.cat([positions, orientations], dim=-1),
                 env_ids=torch.tensor([cur_env], device=env.device),
@@ -217,22 +204,22 @@ def randomize_object_pose(
 def randomize_objects_pose_one_side_line(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor,
-    asset_cfgs: list[SceneEntityCfg],
+    asset_cfgs: list[SceneEntityCfg] | None,
     line_cfg: SceneEntityCfg,
     min_separation: float = 0.0,
     max_sample_tries: int = 5000,
 ):
-
+    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
     if env_ids is None:
         return
 
+    if asset_cfgs is None:
+        asset_cfgs = [SceneEntityCfg(name) for name in scene_cfg.object_names]
     line: AssetBase = env.scene[line_cfg.name]
     env_origins_xy: torch.Tensor = env.scene.env_origins[:, :2]
     # Convert world poses to env-local frame because randomize_object_pose adds env origins back.
     line_pos_xy: torch.Tensor = line.data.root_pos_w[:, :2] - env_origins_xy
-    line_dir_xy: torch.Tensor = line_direction_xy_from_quat_unnormalized(
-        line.data.root_quat_w
-    )
+    line_dir_xy: torch.Tensor = line_direction_xy_from_quat_unnormalized(line.data.root_quat_w)
 
     # get table limits from env cfg
     table_cfg = SceneEntityCfg("table")
@@ -304,14 +291,10 @@ def randomize_rigid_objects_in_focus(
             selected_ids.append(object_id)
 
             # Create object state tensor
-            object_states = torch.stack([out_focus_state] * asset.num_objects).to(
-                device=env.device
-            )
+            object_states = torch.stack([out_focus_state] * asset.num_objects).to(device=env.device)
             pose_tensor = torch.tensor([pose_list[asset_idx]], device=env.device)
             positions = pose_tensor[:, 0:3] + env.scene.env_origins[cur_env, 0:3]
-            orientations = math_utils.quat_from_euler_xyz(
-                pose_tensor[:, 3], pose_tensor[:, 4], pose_tensor[:, 5]
-            )
+            orientations = math_utils.quat_from_euler_xyz(pose_tensor[:, 3], pose_tensor[:, 4], pose_tensor[:, 5])
             object_states[object_id, 0:3] = positions
             object_states[object_id, 3:7] = orientations
 
@@ -349,8 +332,7 @@ def randomize_visual_texture_material(
         parser will parse the individual asset properties separately.
     """
     if hasattr(env.cfg, "eval_mode") and (
-        not env.cfg.eval_mode
-        or env.cfg.eval_type not in [f"{asset_cfg.name}_texture", "all"]
+        not env.cfg.eval_mode or env.cfg.eval_type not in [f"{asset_cfg.name}_texture", "all"]
     ):
         return
         # textures = [default_texture]
@@ -388,9 +370,7 @@ def randomize_visual_texture_material(
     if not hasattr(asset, "cfg"):
         prims_group = rep.get.prims(path_pattern=f"{asset.prim_paths[0]}/visuals")
     else:
-        prims_group = rep.get.prims(
-            path_pattern=f"{asset.cfg.prim_path}/{body_names_regex}/visuals"
-        )
+        prims_group = rep.get.prims(path_pattern=f"{asset.cfg.prim_path}/{body_names_regex}/visuals")
 
     with prims_group:
         rep.randomizer.texture(

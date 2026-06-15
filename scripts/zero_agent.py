@@ -7,22 +7,18 @@
 
 """Launch Isaac Sim Simulator first."""
 
-import argparse
+
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from isaaclab.app import AppLauncher
+from parser_utils import parse_arguments
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Zero agent for Isaac Lab environments.")
-parser.add_argument(
-    "--disable_fabric",
-    action="store_true",
-    default=False,
-    help="Disable fabric and use USD I/O operations.",
-)
-parser.add_argument(
-    "--num_envs", type=int, default=None, help="Number of environments to simulate."
-)
-parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser = parse_arguments()
+
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -41,17 +37,23 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 
 import era_bench.tasks  # noqa: F401
+from env_cfg import configure_env
 
 
 def main():
     """Zero actions agent with Isaac Lab environment."""
     # parse configuration
-    env_cfg = parse_env_cfg(
-        args_cli.task,
-        device=args_cli.device,
-        num_envs=args_cli.num_envs,
-        use_fabric=not args_cli.disable_fabric,
+    env_cfg = (
+        parse_env_cfg(
+            args_cli.task,
+            device=args_cli.device,
+            num_envs=args_cli.num_envs,
+            use_fabric=not args_cli.disable_fabric,
+        )
+        if not args_cli.create_dataset
+        else configure_env(args_cli)
     )
+
     # create environment
     env = gym.make(args_cli.task, cfg=env_cfg)
 
