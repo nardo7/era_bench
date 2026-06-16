@@ -5,9 +5,11 @@ import torch
 from typing import TYPE_CHECKING, cast
 
 
-from isaaclab.assets import Articulation, RigidObject, RigidObjectCollection
+from isaaclab.assets import Articulation, RigidObject, RigidObjectCollection, AssetBase
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import FrameTransformer
+import isaaclab.sim as sim_utils
+from isaacsim.core.prims import XFormPrim
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -62,7 +64,7 @@ def gripper_pos(
 
 def object_obs(
     env: ManagerBasedRLEnv,
-    object_names: list[str] = ["cube_1", "cube_2", "cube_3"],
+    object_names: list[str] | None = None,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
 ):
     """
@@ -80,6 +82,9 @@ def object_obs(
         cube_2 to cube_3,
         cube_1 to cube_3,
     """
+    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
+    if object_names is None:
+        object_names = scene_cfg.object_names
     cubes: list[RigidObject] = [env.scene[name] for name in object_names]
 
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
@@ -105,9 +110,12 @@ def object_obs(
 
 def cube_positions_in_world_frame(
     env: ManagerBasedRLEnv,
-    cubes_names: list[str] = ["cube_1", "cube_2", "cube_3"],
+    cubes_names: list[str] | None = None,
 ) -> torch.Tensor:
     """The position of the cubes in the world frame."""
+    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
+    if cubes_names is None:
+        cubes_names = scene_cfg.object_names
 
     cubes: list[RigidObject] = [env.scene[name] for name in cubes_names]
     return torch.cat([cube.data.root_pos_w for cube in cubes], dim=1)
@@ -115,9 +123,13 @@ def cube_positions_in_world_frame(
 
 def cube_orientations_in_world_frame(
     env: ManagerBasedRLEnv,
-    cubes_names: list[str] = ["cube_1", "cube_2", "cube_3"],
+    cubes_names: list[str] | None = None,
 ):
     """The orientation of the cubes in the world frame."""
+    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
+    if cubes_names is None:
+        cubes_names = scene_cfg.object_names
+
     cubes: list[RigidObject] = [env.scene[name] for name in cubes_names]
 
     return torch.cat([cube.data.root_quat_w for cube in cubes], dim=1)
@@ -180,6 +192,7 @@ def objects_placed(
     robot_cfg: SceneEntityCfg,
     objects_cfg: list[SceneEntityCfg] | None = None,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    table_cfg: SceneEntityCfg = SceneEntityCfg("table"),
     xy_threshold: float = 0.05,
     height_threshold: float = 0.005,
     height_diff: float = 0.0468,
@@ -193,10 +206,18 @@ def objects_placed(
         objects_cfg = [SceneEntityCfg(name) for name in scene_cfg.object_names]
 
     upper_objects: list[RigidObject] = [env.scene[obj_cfg.name] for obj_cfg in objects_cfg]
-    lower_object: RigidObject = env.scene.table
+    lower_object: AssetBase = env.scene[table_cfg.name]
 
     upper_pos_w = torch.stack([obj.data.root_pos_w for obj in upper_objects], dim=1)
-    lower_pos_w = lower_object.data.root_pos_w.unsqueeze(1)
+
+    # Handle both RigidObject (has .data.root_pos_w) and XFormPrim (use .get_world_poses())
+    if hasattr(lower_object, "data"):
+        lower_pos_w = lower_object.data.root_pos_w.unsqueeze(1)
+    elif isinstance(lower_object, XFormPrim):
+        pos, _ = lower_object.get_world_poses()
+        lower_pos_w = torch.tensor(pos, device=upper_pos_w.device, dtype=upper_pos_w.dtype).unsqueeze(1)
+    else:
+        raise RuntimeError(f"Unable to get position from lower_object of type {type(lower_object).__name__}")
 
     pos_diff = upper_pos_w - lower_pos_w
     height_dist = torch.linalg.vector_norm(pos_diff[:, :, 2:], dim=2)

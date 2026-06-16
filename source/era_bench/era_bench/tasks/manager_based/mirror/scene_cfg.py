@@ -42,7 +42,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 2)
         ),
-        offset=CameraCfg.OffsetCfg(pos=(1.0, 0.0, 0.4), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"),
+        offset=CameraCfg.OffsetCfg(pos=(1.8, 0.0, 0.6), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"),
     )
 
     # end-effector sensor: will be populated by agent env cfg
@@ -92,7 +92,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     def __post_init__(self):
         # Define a thin physical barrier
         line_props = sim_utils.CuboidCfg(
-            size=(1.0, 0.1, 0.1),  # Long (X), narrow (Y), very short height (Z)
+            size=(0.5, 0.05, 0.05),  # Long (X), narrow (Y), very short height (Z)
             # Enable physical collisions and dynamics
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 rigid_body_enabled=True,

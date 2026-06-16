@@ -149,17 +149,17 @@ class EventCfg:
         mode="reset",
         params={
             "pose_range": {
-                "x": (-0.5, 0.5),
-                "y": (-0.10, 0.10),
+                "x": (0.5, 0.5),
+                "y": (0.0, 0.0),
                 "z": (0.02, 0.02),
-                "yaw": (-1.0, 1.0),
+                "yaw": (-1.0, -1.0),
             },
             "asset_cfgs": [SceneEntityCfg("line")],
         },
     )
 
     randomize_object_positions = EventTerm(
-        func=mdp.randomize_objects_pose_one_side_line,
+        func=mdp.randomize_objects_pose_one_side_line_half_plane,
         mode="reset",
         params={
             "min_separation": 0.1,
@@ -180,7 +180,12 @@ class TerminationsCfg:
     # (1) Time out
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    success = DoneTerm(func=mdp.are_objects_mirrored)
+    success = DoneTerm(
+        func=mdp.are_objects_mirrored,
+        params={
+            "middle_line_name": "line",
+        },
+    )
 
 
 ##

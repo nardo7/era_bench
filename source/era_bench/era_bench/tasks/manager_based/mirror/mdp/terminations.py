@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import torch
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from era_bench.tasks.manager_based.mirror.scene_cfg import EraBenchSceneCfg
 from isaaclab.assets import RigidObject
 from .utils import line_direction_xy_from_quat
 
@@ -15,9 +16,7 @@ def _mirror_points_across_line(
 ) -> torch.Tensor:
     """Mirrors points across a 2D line defined by a point and unit direction."""
     points_to_line = points_xy - line_pos_xy.unsqueeze(1)
-    parallel_mag = torch.sum(
-        points_to_line * line_dir_xy.unsqueeze(1), dim=-1, keepdim=True
-    )
+    parallel_mag = torch.sum(points_to_line * line_dir_xy.unsqueeze(1), dim=-1, keepdim=True)
     proj_parallel = parallel_mag * line_dir_xy.unsqueeze(1)
     perpendicular = points_to_line - proj_parallel
     return line_pos_xy.unsqueeze(1) + proj_parallel - perpendicular
@@ -36,14 +35,7 @@ def _signed_distance_to_line(
 
 def are_objects_mirrored(
     env: ManagerBasedRLEnv,
-    object_names: tuple[str, ...] = (
-        "cube_1",
-        "cube_2",
-        "cube_3",
-        "cube_4",
-        "cube_5",
-        "cube_6",
-    ),
+    object_names: list[str] | None = None,
     middle_line_name: str = "middle_line",
     xy_threshold: float = 0.04,
     height_threshold: float = 0.005,
@@ -56,6 +48,9 @@ def are_objects_mirrored(
     ``env.episode_length_buf == 0``) and evaluates success by comparing the current
     object pose against the mirrored reference pose.
     """
+    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
+    if object_names is None:
+        object_names = scene_cfg.object_names
     cubes: list[RigidObject] = [env.scene[name] for name in object_names]
     current_pos = torch.stack([cube.data.root_pos_w for cube in cubes], dim=1)
 
@@ -66,9 +61,7 @@ def are_objects_mirrored(
     cache_name = "_mirror_reference_positions"
     if not hasattr(env, cache_name):
         setattr(env, cache_name, {})
-    reference_cache: dict[tuple[tuple[str, ...], str], torch.Tensor] = getattr(
-        env, cache_name
-    )
+    reference_cache: dict[tuple[tuple[str, ...], str], torch.Tensor] = getattr(env, cache_name)
 
     cache_key = (tuple(object_names), middle_line_name)
     if cache_key not in reference_cache:
@@ -84,9 +77,7 @@ def are_objects_mirrored(
     if torch.any(reset_envs):
         reference_pos[reset_envs] = current_pos[reset_envs]
 
-    target_xy = _mirror_points_across_line(
-        reference_pos[:, :, :2], line_pos_xy, line_dir_xy
-    )
+    target_xy = _mirror_points_across_line(reference_pos[:, :, :2], line_pos_xy, line_dir_xy)
     xy_error = torch.linalg.norm(current_pos[:, :, :2] - target_xy, dim=-1)
     z_error = torch.abs(current_pos[:, :, 2] - reference_pos[:, :, 2])
 

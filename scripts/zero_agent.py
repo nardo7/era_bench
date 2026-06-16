@@ -63,13 +63,21 @@ def main():
     # reset environment
     env.reset()
     # simulate environment
+    step = 0
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
             # compute zero actions
             actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
             # apply actions
-            env.step(actions)
+            obs, reward, terminated, truncated, info = env.step(actions)
+        step += 1
+
+
+        if step >= args_cli.max_steps:
+            print(f"[INFO]: Reached max steps: {args_cli.max_steps}. Exiting...")
+            break
+        
 
     # close the simulator
     env.close()
