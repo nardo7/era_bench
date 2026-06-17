@@ -17,11 +17,11 @@ from isaacsim.core.utils.extensions import enable_extension
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, AssetBase, RigidObject
 from isaaclab.managers import SceneEntityCfg
-from .utils import line_direction_xy_from_quat_unnormalized
+from ...common.utils import line_direction_xy_from_quat_unnormalized
 from ..scene_cfg import EraBenchSceneCfg
 from isaacsim.core.prims import XFormPrim
 from pxr import Usd, UsdGeom
-from .geometry_utils import intersect_line_rectangle, normal_vectors, sample_points_on_half_plane
+from ...common.geometry_utils import sample_points_on_half_plane
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv

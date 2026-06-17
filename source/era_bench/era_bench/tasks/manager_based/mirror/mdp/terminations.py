@@ -3,23 +3,13 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING, cast
 
+from era_bench.tasks.manager_based.common.geometry_utils import mirror_points_across_line
 from era_bench.tasks.manager_based.mirror.scene_cfg import EraBenchSceneCfg
 from isaaclab.assets import RigidObject
-from .utils import line_direction_xy_from_quat
+from ...common.utils import line_direction_xy_from_quat
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
-
-
-def _mirror_points_across_line(
-    points_xy: torch.Tensor, line_pos_xy: torch.Tensor, line_dir_xy: torch.Tensor
-) -> torch.Tensor:
-    """Mirrors points across a 2D line defined by a point and unit direction."""
-    points_to_line = points_xy - line_pos_xy.unsqueeze(1)
-    parallel_mag = torch.sum(points_to_line * line_dir_xy.unsqueeze(1), dim=-1, keepdim=True)
-    proj_parallel = parallel_mag * line_dir_xy.unsqueeze(1)
-    perpendicular = points_to_line - proj_parallel
-    return line_pos_xy.unsqueeze(1) + proj_parallel - perpendicular
 
 
 def _signed_distance_to_line(
@@ -77,7 +67,7 @@ def are_objects_mirrored(
     if torch.any(reset_envs):
         reference_pos[reset_envs] = current_pos[reset_envs]
 
-    target_xy = _mirror_points_across_line(reference_pos[:, :, :2], line_pos_xy, line_dir_xy)
+    target_xy = mirror_points_across_line(reference_pos[:, :, :2], line_pos_xy, line_dir_xy)
     xy_error = torch.linalg.norm(current_pos[:, :, :2] - target_xy, dim=-1)
     z_error = torch.abs(current_pos[:, :, 2] - reference_pos[:, :, 2])
 

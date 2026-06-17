@@ -92,3 +92,14 @@ def sample_points_on_half_plane(
     sampled_points = sampled_points + n.unsqueeze(-1) * n_directions.unsqueeze(1)
 
     return sampled_points  # B, C, 2
+
+
+def mirror_points_across_line(
+    points_xy: torch.Tensor, line_pos_xy: torch.Tensor, line_dir_xy: torch.Tensor
+) -> torch.Tensor:
+    """Mirrors points across a 2D line defined by a point and unit direction."""
+    points_to_line = points_xy - line_pos_xy.unsqueeze(1)
+    parallel_mag = torch.sum(points_to_line * line_dir_xy.unsqueeze(1), dim=-1, keepdim=True)
+    proj_parallel = parallel_mag * line_dir_xy.unsqueeze(1)
+    perpendicular = points_to_line - proj_parallel
+    return line_pos_xy.unsqueeze(1) + proj_parallel - perpendicular
