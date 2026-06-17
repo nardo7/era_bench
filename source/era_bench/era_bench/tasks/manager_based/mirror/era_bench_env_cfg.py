@@ -149,10 +149,10 @@ class EventCfg:
         mode="reset",
         params={
             "pose_range": {
-                "x": (0.5, 0.5),
-                "y": (0.0, 0.0),
+                "x": (0.4, 0.6),
+                "y": (-0.1, 0.1),
                 "z": (0.02, 0.02),
-                "yaw": (-1.0, -1.0),
+                "yaw": (-1.0, 1.0),
             },
             "asset_cfgs": [SceneEntityCfg("line")],
         },

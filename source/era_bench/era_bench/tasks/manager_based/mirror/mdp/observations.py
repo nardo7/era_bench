@@ -241,7 +241,7 @@ def objects_placed(
                     torch.tensor(scene_cfg.gripper_open_val, dtype=torch.float32).to(env.device),
                     atol=1e-4,
                     rtol=1e-4,
-                ),
+                ).unsqueeze(1),
                 placed_geom,
             )
             placed = torch.logical_and(
@@ -250,7 +250,7 @@ def objects_placed(
                     torch.tensor(scene_cfg.gripper_open_val, dtype=torch.float32).to(env.device),
                     atol=1e-4,
                     rtol=1e-4,
-                ),
+                ).unsqueeze(1),
                 placed,
             )
         else:

@@ -21,7 +21,7 @@ from .utils import line_direction_xy_from_quat_unnormalized
 from ..scene_cfg import EraBenchSceneCfg
 from isaacsim.core.prims import XFormPrim
 from pxr import Usd, UsdGeom
-from .geometry_utils import intersect_line_rectangle, normal_vectors
+from .geometry_utils import intersect_line_rectangle, normal_vectors, sample_points_on_half_plane
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -215,6 +215,8 @@ def randomize_object_pose(
     if not env_id_list:
         return
 
+    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
+
     pose_range_by_env = _normalize_pose_range(pose_range, env_id_list)
 
     # Randomize poses in each environment independently
@@ -222,6 +224,7 @@ def randomize_object_pose(
         if cur_env not in pose_range_by_env:
             raise KeyError(f"Missing pose_range entry for env_id {cur_env}.")
 
+        yaw_offset = scene_cfg.table.init_state.rot[2]
         pose_list = sample_object_poses(
             num_objects=len(asset_cfgs),
             min_separation=min_separation,
@@ -237,8 +240,11 @@ def randomize_object_pose(
             # Write pose to simulation
             pose_tensor = torch.tensor([pose_list[i]], device=env.device)
             positions = pose_tensor[:, 0:3] + env.scene.env_origins[cur_env, 0:3]
-            print(f"Positions for env {cur_env}, object {asset_cfg.name}: {positions}")
-            orientations = math_utils.quat_from_euler_xyz(pose_tensor[:, 3], pose_tensor[:, 4], pose_tensor[:, 5])
+            orientations = math_utils.quat_from_euler_xyz(
+                pose_tensor[:, 3],
+                pose_tensor[:, 4],
+                pose_tensor[:, 5] + yaw_offset,
+            )
             env_id_tensor = torch.tensor([cur_env], device=env.device)
             asset.write_root_pose_to_sim(
                 torch.cat([positions, orientations], dim=-1),
@@ -271,6 +277,7 @@ def randomize_objects_pose_one_side_line_half_plane(
     line: RigidObject = env.scene[line_cfg.name]
     env_ids_tensor = torch.tensor(env_ids, device=env.device)
     env_origins_xy: torch.Tensor = env.scene.env_origins[env_ids_tensor, :2]  # (len(env_ids), 2)
+
     # Convert world poses to env-local frame because randomize_object_pose adds env origins back.
     line_pos_xy: torch.Tensor = line.data.root_pos_w[env_ids_tensor, :2] - env_origins_xy  # (len(env_ids), 2)
     line_dir_xy: torch.Tensor = line_direction_xy_from_quat_unnormalized(line.data.root_quat_w)[
@@ -280,113 +287,38 @@ def randomize_objects_pose_one_side_line_half_plane(
     # get table limits from env cfg — index to the reset envs only
     table_cfg = SceneEntityCfg("table")
     table: XFormPrim = env.scene[table_cfg.name]
-    table_size_xy = _xform_prim_world_size_meters(table, env.device)[env_ids_tensor, :2]  # (len(env_ids), 2)
-    table_pos = (
-        torch.as_tensor(table.get_world_poses()[0], device=env.device, dtype=torch.float32)[env_ids_tensor, :2]
-        - env_origins_xy
-    )  # (len(env_ids), 2)
+    table_size_xy = _xform_prim_world_size_meters(table, env.device).expand(len(env_ids), -1)[:, :2]
+    table_pos = torch.tensor(scene_cfg.table.init_state.pos, device=env.device, dtype=torch.float32).expand(
+        len(env_ids), -1
+    )  # (len(env_ids), 3)
 
-    t_boundaries = intersect_line_rectangle(line_pos_xy, line_dir_xy, table_pos, table_size_xy)
-    n_directions = normal_vectors(line_dir_xy)
-    n_boundaries = intersect_line_rectangle(line_pos_xy, n_directions, table_pos, table_size_xy)
-    n_boundaries[..., 0] = torch.where(n_boundaries[..., 0] < 0, 0, n_boundaries[..., 0])
-
-    t = (
-        torch.rand((len(env_ids), number_of_objects), device=env.device) * ((t_boundaries[:, 1] - t_boundaries[:, 0]))
-        + t_boundaries[:, 0]
-    )
-    sampled_points = line_pos_xy + t.unsqueeze(-1) * line_dir_xy
-
-    n = (
-        torch.rand((len(env_ids), number_of_objects), device=env.device) * (n_boundaries[:, 1] - n_boundaries[:, 0])
-        + n_boundaries[:, 0]
-    )
-    sampled_points = sampled_points + n.unsqueeze(-1) * n_directions
+    sampled_points = sample_points_on_half_plane(
+        env_ids=env_ids,
+        line_pos_xy=line_pos_xy,
+        line_dir_xy=line_dir_xy,
+        table_pos=table_pos,
+        table_size_xy=table_size_xy,
+        number_of_objects=number_of_objects,
+    )  # (len(env_ids), number_of_objects, 2)
 
     for env_idx, cur_env in enumerate(env_ids):
         for obj_idx, asset_cfg in enumerate(asset_cfgs):
             asset: AssetBase = env.scene[asset_cfg.name]
             position = sampled_points[env_idx, obj_idx] + env.scene.env_origins[cur_env, 0:2]
             position = torch.cat([position, torch.tensor([height], device=env.device, dtype=torch.float32)])
-            print(f"Randomized position for env {cur_env}, object {asset_cfg.name}: {position}")
             orientation = math_utils.quat_from_euler_xyz(
                 torch.tensor(0.0, device=env.device, dtype=torch.float32),
                 torch.tensor(0.0, device=env.device, dtype=torch.float32),
                 torch.tensor(random.uniform(-math.pi, math.pi), device=env.device, dtype=torch.float32),
             )
             env_id_tensor = torch.tensor([cur_env], device=env.device)
-            asset.write_root_pose_to_sim(
-                torch.cat([position.unsqueeze(0), orientation.unsqueeze(0)], dim=-1), env_id_tensor
-            )
+            pose = torch.cat([position.unsqueeze(0), orientation.unsqueeze(0)], dim=-1)
+            asset.write_root_pose_to_sim(pose, env_ids=env_id_tensor)
 
             asset.write_root_velocity_to_sim(
                 torch.zeros(1, 6, device=env.device),
                 env_ids=env_id_tensor,
             )
-
-
-def randomize_objects_pose_one_side_line(
-    env: ManagerBasedEnv,
-    env_ids: list[int] | torch.Tensor | None,
-    line_cfg: SceneEntityCfg,
-    asset_cfgs: list[SceneEntityCfg] | None = None,
-    min_separation: float = 0.0,
-    max_sample_tries: int = 5000,
-):
-    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
-    if env_ids is None:
-        return
-    env_ids = _normalize_env_ids(env_ids)
-
-    if asset_cfgs is None:
-        asset_cfgs = [SceneEntityCfg(name) for name in scene_cfg.object_names]
-    line: RigidObject = env.scene[line_cfg.name]
-    env_origins_xy: torch.Tensor = env.scene.env_origins[:, :2]
-    # Convert world poses to env-local frame because randomize_object_pose adds env origins back.
-    line_pos_xy: torch.Tensor = line.data.root_pos_w[:, :2] - env_origins_xy
-    line_dir_xy: torch.Tensor = line_direction_xy_from_quat_unnormalized(line.data.root_quat_w)
-
-    # get table limits from env cfg
-    table_cfg = SceneEntityCfg("table")
-    table: XFormPrim = env.scene[table_cfg.name]
-    table_size_xy = _xform_prim_world_size_meters(table, env.device)[:, :2]
-    x_froms = line_pos_xy[:, 0]
-    x_tos = line_pos_xy[:, 0] + line_dir_xy[:, 0]
-    y_froms = line_pos_xy[:, 1] + line_dir_xy[:, 1]
-    table_pos_w = torch.as_tensor(table.get_world_poses()[0], device=env.device, dtype=torch.float32)
-    table_pos_xy: torch.Tensor = table_pos_w[:, :2] - env_origins_xy
-    y_tos: torch.Tensor = table_pos_xy[:, 1] + (table_size_xy[:, 1] - 0.3) / 2
-
-    print(f"line_pos_xy: {line_pos_xy}")
-    print(f"line_dir_xy: {line_dir_xy}")
-    print(f"table_pos_xy: {table_pos_xy}")
-    print(f"table_size_xy: {table_size_xy}")
-    print(f"x_froms: {x_froms}, x_tos: {x_tos}")
-    print(f"y_froms: {y_froms}, y_tos: {y_tos}")
-    limits: dict[int, dict[str, tuple[float, float]]] = {}
-    for cur_env, x_from, x_to, y_from, y_to in zip(
-        env_ids,
-        x_froms.tolist(),
-        x_tos.tolist(),
-        y_froms.tolist(),
-        y_tos.tolist(),
-    ):
-        limits[cur_env] = {
-            "x": (x_from, x_to),
-            "y": (y_from, y_to),
-            "z": (0.0403, 0.0403),
-            "roll": (0.0, 0.0),
-            "pitch": (0.0, 0.0),
-            "yaw": (-1.0, 1.0),
-        }
-    randomize_object_pose(
-        env=env,
-        env_ids=env_ids,
-        asset_cfgs=asset_cfgs,
-        min_separation=min_separation,
-        pose_range=limits,
-        max_sample_tries=max_sample_tries,
-    )
 
 
 def randomize_rigid_objects_in_focus(
