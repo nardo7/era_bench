@@ -28,7 +28,9 @@ def configure_env(args_cli: Namespace) -> ManagerBasedRLEnvCfg:
     env_cfg.observations.policy.concatenate_terms = False
 
     # Attach the recorder: records actions/states/obs + generates per-episode MP4 videos.
-    env_cfg.recorders = RecorderManagerCfg() if args_cli.store_videos else ActionStateRecorderManagerCfg()
+    env_cfg.recorders = (
+        RecorderManagerCfg(sensor_name="table_cam") if args_cli.store_videos else ActionStateRecorderManagerCfg()
+    )
     env_cfg.recorders.dataset_export_dir_path = output_dir
     env_cfg.recorders.dataset_filename = output_file_name
     env_cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_FAILED_IN_SEPARATE_FILES

@@ -10,12 +10,11 @@
 
 import sys
 import os
-from time import time
+import time
 from typing import cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from era_bench.tasks.manager_based.common.utils import line_direction_xy_from_quat
 from isaaclab.app import AppLauncher
 from parser_utils import parse_arguments
 
@@ -47,6 +46,7 @@ from era_bench.tasks.manager_based.mirror.mirror_state_machine import MirrorStat
 from era_bench.tasks.manager_based.common.geometry_utils import mirror_points_across_line
 from isaaclab.sensors import FrameTransformer
 from isaaclab_mimic.motion_planners.curobo.curobo_planner import CuroboPlanner
+from era_bench.tasks.manager_based.common.utils import line_direction_xy_from_quat
 
 
 def execute_plan(env: ManagerBasedRLEnv, planner: CuroboPlanner, target_gripper_pose: torch.Tensor):
@@ -74,7 +74,7 @@ def main():
     )
 
     # create environment
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     env = cast(ManagerBasedRLEnv, env)
 
     # configure curobo planner
@@ -113,22 +113,22 @@ def main():
             tcp_rest_position = ee_frame_sensor.data.target_pos_w[..., 0, :].clone() - env.scene.env_origins
             tcp_rest_orientation = ee_frame_sensor.data.target_quat_w[..., 0, :].clone()
 
-            object_names = env.scene.scene_cfg.object_names
+            object_names = env.scene.cfg.object_names
             object_cfgs = [SceneEntityCfg(name=name) for name in object_names]
             objects: list[RigidObject] = [env.scene[cfg.name] for cfg in object_cfgs]
             objects_pos = torch.stack([obj.data.root_pos_w.clone() for obj in objects], dim=1) - env.scene.env_origins
-            line_cfg = SceneEntityCfg(name=env.scene.scene_cfg.line_name)
+            line_cfg = SceneEntityCfg(name=env.scene.cfg.line_name)
             line: RigidObject = env.scene[line_cfg.name]
             line_pos = line.data.root_pos_w[:, :2].clone() - env.scene.env_origins[:, :2]
             line_dir_w = line_direction_xy_from_quat(line.data.root_quat_w.clone())
 
             dest_pos_xy = mirror_points_across_line(objects_pos[:, :, :2], line_pos, line_dir_w)
-            dest_pos = torch.cat((dest_pos_xy, objects_pos[:, :, 2:3]), dim=-1)
+            dest_pose = torch.cat((dest_pos_xy, objects_pos[:, :, 2:3], desired_orientation), dim=-1)
 
             next_pose = mirror_sm.compute(
-                torch.cat((tcp_rest_position, tcp_rest_orientation), dim=-1), objects_pos, dest_pos
+                torch.cat((tcp_rest_position, tcp_rest_orientation), dim=-1), objects_pos, dest_pose
             )
-            planner.update_world_and_plan_motion(next_pose)
+            planner.update_world_and_plan_motion(next_pose[..., :-1])
 
             execute_plan(env, planner, next_pose[..., -1])
 

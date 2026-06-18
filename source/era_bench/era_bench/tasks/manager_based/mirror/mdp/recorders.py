@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import MISSING
 import io
 from collections.abc import Sequence
 
@@ -133,7 +134,7 @@ class EpisodeVideoRecorderCfg(RecorderTermCfg):
     sensor_name: str = "tiled_camera"
     """Name of the TiledCamera sensor in the scene (must match SceneCfg attribute name)."""
 
-    fps: int = 20
+    fps: int = 30
     """Frames per second of the encoded MP4."""
 
 
@@ -141,4 +142,8 @@ class EpisodeVideoRecorderCfg(RecorderTermCfg):
 class RecorderManagerCfg(ActionStateRecorderManagerCfg):
     """Extends the default recorder with per-episode video generation."""
 
-    record_episode_video = EpisodeVideoRecorderCfg()
+    record_episode_video: EpisodeVideoRecorderCfg = MISSING
+
+    def __init__(self, sensor_name: str = "tiled_camera", **kwds):
+        super().__init__(**kwds)
+        self.record_episode_video = EpisodeVideoRecorderCfg(sensor_name=sensor_name)
