@@ -14,8 +14,8 @@ def intersect_line_rectangle(
     """
     x_margin = rect_sizes[..., 0] - x_margin_offset
     y_margin = rect_sizes[..., 1] - y_margin_offset
-    x_min = rect_centers[..., 0] - x_margin / 2
-    x_max = rect_centers[..., 0] + x_margin / 2
+    x_min = rect_centers[..., 0] - x_margin / 2 + 0.4  # add offset to avoid to close to robot
+    x_max = rect_centers[..., 0] + x_margin / 2 - 0.3  # add offset to avoid to close to robot
     y_min = rect_centers[..., 1] - y_margin / 2
     y_max = rect_centers[..., 1] + y_margin / 2
 

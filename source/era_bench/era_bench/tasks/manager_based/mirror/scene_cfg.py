@@ -111,7 +111,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
             spawn=line_props,
         )
 
-        objects_amount = random.randint(3, 6)
+        objects_amount = random.randint(2, 3)
 
         for i in range(objects_amount):
             cube_name = f"cube_{i+1}"

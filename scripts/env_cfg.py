@@ -49,9 +49,12 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
     planner_cfg.visualize_plan = False
     planner_cfg.visualize_spheres = False
     planner_cfg.debug_planner = True
-    planner_cfg.retreat_distance = 0.05
-    planner_cfg.approach_distance = 0.05
+    planner_cfg.retreat_distance = 0.00
+    planner_cfg.approach_distance = 0.00
     planner_cfg.time_dilation_factor = 1.0
+    planner_cfg.interpolation_dt = 0.1
+    planner_cfg.trajopt_tsteps = 18
+    # planner_cfg.debug_planner = False
 
     planner = CuroboPlanner(
         env=env,
