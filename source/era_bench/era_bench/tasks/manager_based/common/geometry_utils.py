@@ -14,7 +14,7 @@ def intersect_line_rectangle(
     """
     x_margin = rect_sizes[..., 0] - x_margin_offset
     y_margin = rect_sizes[..., 1] - y_margin_offset
-    x_min = rect_centers[..., 0] - x_margin / 2 + 0.4  # add offset to avoid to close to robot
+    x_min = rect_centers[..., 0] - x_margin / 2 + 0.3  # add offset to avoid to close to robot
     x_max = rect_centers[..., 0] + x_margin / 2 - 0.3  # add offset to avoid to close to robot
     y_min = rect_centers[..., 1] - y_margin / 2
     y_max = rect_centers[..., 1] + y_margin / 2
@@ -57,6 +57,32 @@ def normal_vectors(line_dirs: torch.Tensor) -> torch.Tensor:
     return normals
 
 
+def _sample_ts(
+    env_ids: list[int],
+    t_boundaries: torch.Tensor,
+    number_of_objects: int,
+    min_separation: float = 0.08,
+):
+    batch_size = len(env_ids)
+    num_slots = torch.floor((t_boundaries[:, 1] - t_boundaries[:, 0]) / min_separation).long() + 1
+
+    if (num_slots < number_of_objects).any():
+        raise ValueError(
+            f"Not enough space to place {number_of_objects} objects with min_separation={min_separation}. "
+            f"Max available slots: {num_slots.max().item()}"
+        )
+
+    max_slots = int(num_slots.max().item())
+    slot_range = torch.arange(max_slots, device=t_boundaries.device).unsqueeze(0)
+    valid_slots = slot_range < num_slots.unsqueeze(1)
+
+    rand = torch.rand((batch_size, max_slots), device=t_boundaries.device)
+    rand = torch.where(valid_slots, rand, torch.full_like(rand, float("inf")))
+    slot_indices = torch.argsort(rand, dim=1)[:, :number_of_objects]
+
+    return t_boundaries[:, 0].unsqueeze(-1) + slot_indices.to(t_boundaries.dtype) * min_separation
+
+
 def sample_points_on_half_plane(
     env_ids: list[int],
     line_pos_xy: torch.Tensor,
@@ -64,7 +90,7 @@ def sample_points_on_half_plane(
     table_pos: torch.Tensor,
     table_size_xy: torch.Tensor,
     number_of_objects: int,
-    min_separation: float = 0.08,
+    min_separation: float = 0.1,
 ) -> torch.Tensor:
     """
     Samples points on the half-plane defined by the line and the table boundaries.
@@ -73,16 +99,12 @@ def sample_points_on_half_plane(
     t_boundaries = intersect_line_rectangle(line_pos_xy, line_dir_xy, table_pos, table_size_xy)
     n_directions = normal_vectors(line_dir_xy)
 
-    t = torch.rand((len(env_ids), number_of_objects), device=table_pos.device) * (
-        t_boundaries[:, 1] - t_boundaries[:, 0]
-    ).unsqueeze(-1) + t_boundaries[:, 0].unsqueeze(
-        -1
-    )  # B, C
+    t = _sample_ts(env_ids, t_boundaries, number_of_objects, min_separation)  # (B, C)
     sampled_points = line_pos_xy.unsqueeze(1) + t.unsqueeze(-1) * line_dir_xy.unsqueeze(1)  # B, C, 2
 
     n_boundaries = intersect_line_rectangle(sampled_points.permute(1, 0, 2), n_directions, table_pos, table_size_xy)
     n_boundaries = n_boundaries.permute(1, 0, 2)
-    n_boundaries[..., 0] = torch.where(n_boundaries[..., 0] < 0, min_separation, n_boundaries[..., 0])
+    n_boundaries[..., 0] = torch.clamp_min(n_boundaries[..., 0], min_separation)
 
     n = (
         torch.rand((len(env_ids), number_of_objects), device=table_pos.device)

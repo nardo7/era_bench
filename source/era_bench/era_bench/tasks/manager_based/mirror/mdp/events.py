@@ -262,7 +262,7 @@ def randomize_objects_pose_one_side_line_half_plane(
     line_cfg: SceneEntityCfg,
     asset_cfgs: list[SceneEntityCfg] | None = None,
     height: float = 0.0203,
-    min_separation: float = 0.0,
+    min_separation: float = 0.1,
     max_sample_tries: int = 5000,
 ):
     scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
@@ -299,6 +299,7 @@ def randomize_objects_pose_one_side_line_half_plane(
         table_pos=table_pos,
         table_size_xy=table_size_xy,
         number_of_objects=number_of_objects,
+        min_separation=min_separation,
     )  # (len(env_ids), number_of_objects, 2)
 
     for env_idx, cur_env in enumerate(env_ids):

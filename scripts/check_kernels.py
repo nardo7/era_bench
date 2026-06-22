@@ -9,7 +9,7 @@ import warp as wp
 wp.init()
 
 # Importing the module registers all @wp.kernel and @wp.func definitions.
-from mirror_state_machine import mirror_state_machine_kernel  # noqa: E402
+from era_bench.tasks.manager_based.mirror.mirror_state_machine import mirror_state_machine_kernel  # noqa: E402
 
 # force_load() triggers JIT compilation of every kernel in the module immediately.
 mirror_state_machine_kernel.module.load(device="cpu")

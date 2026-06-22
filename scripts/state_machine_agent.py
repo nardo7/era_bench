@@ -50,6 +50,7 @@ import isaaclab.utils.math as math_utils
 from isaaclab_mimic.motion_planners.curobo.curobo_planner import CuroboPlanner
 from era_bench.tasks.manager_based.common.utils import line_direction_xy_from_quat
 from era_bench.tasks.manager_based.mirror.mirror_state_machine import MirrorStates
+from era_bench.curobo_planner_extended import ExtendedCuroboPlanner
 
 
 def target_eef_pose_to_action(
@@ -156,22 +157,23 @@ def generate_yaw_candidates(
 
 
 def plan_with_fixed_yaw_candidates(
-    planner: CuroboPlanner, target_position: torch.Tensor, base_quat: torch.Tensor
+    planner: ExtendedCuroboPlanner, target_position: torch.Tensor, base_quat: torch.Tensor
 ) -> bool:
     """Try a small fixed set of wrist yaws and keep the first feasible plan."""
     candidate_poses = generate_yaw_candidates(target_position, base_quat, num_candidates=8)
+    candidate_poses = torch.stack(candidate_poses, dim=0)
+    return planner.plan_goalset(candidate_poses[:, :3], candidate_poses[:, 3:7])
+    # for candidate_index, candidate_pose in enumerate(candidate_poses, start=1):
+    #     candidate_matrix_pose = matrix_pose_from_pose(candidate_pose)
+    #     if planner.update_world_and_plan_motion(candidate_matrix_pose):
+    #         print(
+    #             "[INFO]: Planner: Selected yaw candidate "
+    #             f"{candidate_index}/{len(candidate_poses)} with quaternion {candidate_pose[3:7].tolist()}"
+    #         )
+    #         return True
 
-    for candidate_index, candidate_pose in enumerate(candidate_poses, start=1):
-        candidate_matrix_pose = matrix_pose_from_pose(candidate_pose)
-        if planner.update_world_and_plan_motion(candidate_matrix_pose):
-            print(
-                "[INFO]: Planner: Selected yaw candidate "
-                f"{candidate_index}/{len(candidate_poses)} with quaternion {candidate_pose[3:7].tolist()}"
-            )
-            return True
-
-    print(f"[INFO]: Planner: No feasible plan found across {len(candidate_poses)} fixed yaw candidates.")
-    return False
+    # print(f"[INFO]: Planner: No feasible plan found across {len(candidate_poses)} fixed yaw candidates.")
+    # return False
 
 
 def main():
@@ -270,19 +272,20 @@ def main():
                 MirrorStates.MIRRORING.python_value,
                 MirrorStates.RETREATING.python_value,
             ]:
+                next_pose = next_pose[0]
                 if mirror_state[0] == MirrorStates.APPROACHING.python_value:
                     current_goal_idx = int(mirror_sm.current_idx_objects[0].item())
                     grasp_base_quat = desired_orientation[0, current_goal_idx]
-                    plan_success = plan_with_fixed_yaw_candidates(planner, next_pose[0, :3], grasp_base_quat)
+                    plan_success = plan_with_fixed_yaw_candidates(planner, next_pose[:3], grasp_base_quat)
                 else:
                     if mirror_state[0] == MirrorStates.MIRRORING.python_value:
                         print(
                             f"[INFO]: Planner: Planning for mirroring object {object_names[int(mirror_sm.current_idx_objects[0].item())]}"
                         )
-                        mirror_pose = torch.cat((next_pose[0, :3], tcp_rest_orientation[0]), dim=0)
-                        matrix_pose = matrix_pose_from_pose(mirror_pose)
-                    else:
-                        matrix_pose = matrix_pose_from_pose(next_pose[0, :-1])
+                        next_pose = torch.cat(
+                            (next_pose[:3], tcp_rest_orientation[0], next_pose[-1].unsqueeze(-1)), dim=0
+                        )
+                    matrix_pose = matrix_pose_from_pose(next_pose[:-1])
                     plan_success = planner.update_world_and_plan_motion(
                         matrix_pose,
                         expected_attached_object=(
@@ -291,17 +294,8 @@ def main():
                             else None
                         ),
                     )
-                plan_matrix_poses = planner.get_planned_poses()
-                if plan_success and plan_matrix_poses:
-                    pose_1 = target_eef_pose_to_action(
-                        {"eef": plan_matrix_poses[0]}, {"eef": next_pose[0, -1].unsqueeze(-1)}
-                    )
-                    pose_n = target_eef_pose_to_action(
-                        {"eef": plan_matrix_poses[-1]}, {"eef": next_pose[0, -1].unsqueeze(-1)}
-                    )
-                    print(
-                        f"[INFO]: Planner: Planned trajectory from {pose_1[0, :3].tolist()} to {pose_n[0, :3].tolist()}"
-                    )
+                next_pose = next_pose.unsqueeze(0)
+
             if not plan_success:
                 print("[INFO]: Skipping execution for this state-machine step.")
                 current_pose = torch.cat(
