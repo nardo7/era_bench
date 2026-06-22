@@ -36,13 +36,13 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     table_cam = CameraCfg(
         prim_path="{ENV_REGEX_NS}/table_cam",
         update_period=0.0,
-        height=128,
-        width=128,
+        height=256,
+        width=384,
         data_types=["rgb", "distance_to_image_plane"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 2)
         ),
-        offset=CameraCfg.OffsetCfg(pos=(1.8, 0.0, 0.6), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"),
+        offset=CameraCfg.OffsetCfg(pos=(1.8, 0.0, 0.7), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"),
     )
 
     # end-effector sensor: will be populated by agent env cfg

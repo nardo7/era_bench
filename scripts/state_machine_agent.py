@@ -110,6 +110,9 @@ def execute_plan(
         print("[INFO]: No planned trajectory poses available. Skipping execution.")
         return obs, reward, terminated, truncated, info, 0
 
+    dest_pose = planned_trayectory_poses[-1]
+    last_action = target_eef_pose_to_action({"eef": dest_pose}, {"eef": target_gripper_pose.unsqueeze(-1)})
+    print(f"[INFO]: Trayectory goal planned: {last_action[:3].tolist()} with quaternion {last_action[3:7].tolist()}")
     executed_steps = 0
     for pose in planned_trayectory_poses:
         # from matrix pose to action
@@ -219,12 +222,18 @@ def main():
     line_dir_w = line_direction_xy_from_quat(line.data.root_quat_w.clone())
 
     dest_pos_xy = mirror_points_across_line(objects_pos[:, :, :2], line_pos, line_dir_w)
-    dest_poses = torch.cat((dest_pos_xy, objects_pos[:, :, 2:3], desired_orientation), dim=-1)
+    print(
+        f"[INFO]: MirrorStateMachine: Current line position: {line_pos.tolist()} and direction: {line_dir_w.tolist()}"
+    )
+    print(f"[INFO]: MirrorStateMachine: Current object position: {objects_pos[0, :, :2].tolist()}")
+    print(f"[INFO]: MirrorStateMachine: Desired mirrored position: {dest_pos_xy[0].tolist()}")
+    dest_poses = torch.cat((dest_pos_xy, objects_pos[:, :, 2:3] + 0.01, desired_orientation), dim=-1)
     mirror_sm = MirrorStateMachine(
         dt=env_cfg.sim.dt * env_cfg.decimation,
         num_envs=env.num_envs,
         dest_poses=dest_poses,
         device=env.device,  # pyright: ignore[reportArgumentType]
+        position_threshold=0.03,
     )
 
     # simulate environment
@@ -250,10 +259,6 @@ def main():
             objects: list[RigidObject] = [env.scene[cfg.name] for cfg in object_cfgs]
             objects_pos = torch.stack([obj.data.root_pos_w.clone() for obj in objects], dim=1) - env.scene.env_origins
             objects_quat = torch.stack([obj.data.root_quat_w.clone() for obj in objects], dim=1)
-            line_cfg = SceneEntityCfg(name=scene_cfg.line_name)
-            line: RigidObject = env.scene[line_cfg.name]
-            line_pos = line.data.root_pos_w[:, :2].clone() - env.scene.env_origins[:, :2]
-            line_dir_w = line_direction_xy_from_quat(line.data.root_quat_w.clone())
 
             objects_pos = torch.cat((objects_pos, objects_quat), dim=-1)
             print(f"[INFO]: MirrorStateMachine: Current object position: {objects_pos[0, :, :3].tolist()}")

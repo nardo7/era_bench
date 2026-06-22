@@ -88,7 +88,7 @@ def get_state_config(state: int) -> tuple[float, int]:
     elif state == MIRROR_STATE_MIRRORING:  # MIRRORING
         return 0.5, MIRROR_STATE_PLACING
     elif state == MIRROR_STATE_PLACING:  # PLACING
-        return 0.1, MIRROR_STATE_RETREATING
+        return 0.1, MIRROR_STATE_REST  # MIRROR_STATE_RETREATING
     else:  # RETREATING (state == MIRROR_STATE_RETREATING)
         return 0.1, MIRROR_STATE_REST
 
@@ -104,6 +104,7 @@ def mirror_state_machine_kernel(
     des_ee_pose: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     des_gripper_state: wp.array(dtype=float),  # pyright: ignore[reportInvalidTypeForm]
     offset: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
+    retreat_offset: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     current_goal_objects: wp.array(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     position_threshold: float,
 ):
@@ -124,7 +125,7 @@ def mirror_state_machine_kernel(
             wp.transform_get_translation(des_ee_pose[tid]),
             position_threshold,
         )
-        if state == 1 or state == 3  # APPROACHING or MIRRORING
+        if state == MIRROR_STATE_APPROACHING or state == MIRROR_STATE_MIRRORING  # APPROACHING or MIRRORING
         else condition
     )
 
@@ -135,7 +136,7 @@ def mirror_state_machine_kernel(
         sm_wait_time[tid] = 0.0
         wp.printf("[INFO]: MirrorStateMachine: Transitioning to state %d for env %d\n", next_state, tid)
 
-    if state == 5 and condition:  # RETREATING
+    if state == MIRROR_STATE_PLACING and condition:
         current_goal_objects[tid] = (current_goal_object_idx + 1) % wp.len(desired_goal_positions[tid])
 
     if state == MIRROR_STATE_REST:
@@ -164,8 +165,7 @@ def mirror_state_machine_kernel(
 
     elif state == MIRROR_STATE_RETREATING:
         des_gripper_state[tid] = GripperState.OPEN
-        retreat_offset = offset[tid] * 3.0
-        des_ee_pose[tid] = wp.transform_multiply(retreat_offset, ee_pose[tid])
+        des_ee_pose[tid] = wp.transform_multiply(retreat_offset[tid], ee_pose[tid])
 
 
 class MirrorStateMachine:
@@ -199,9 +199,12 @@ class MirrorStateMachine:
 
         # approach above object offset
         self.offset = torch.zeros((self.num_envs, 7), device=device)
+        self.retreat_offset = torch.zeros((self.num_envs, 7), device=device)
         # set offset 0.1m above the object
         self.offset[:, 2] = 0.1
         self.offset[:, -1] = 1.0  # warp expects quaternion as (x, y, z, w)
+        self.retreat_offset[:, 2] = 0.2  # retreat 0.2m above the current position
+        self.retreat_offset[:, -1] = 1.0  # convert to (x, y, z, w) for warp kernel use
 
         # convert to warp
         self.sm_dt_wp = wp.from_torch(self.sm_dt, wp.float32)
@@ -210,6 +213,7 @@ class MirrorStateMachine:
         self.des_ee_pose_wp = wp.from_torch(self.des_ee_pose, wp.transform)
         self.des_gripper_state_wp = wp.from_torch(self.des_gripper_state, wp.float32)
         self.offset_wp = wp.from_torch(self.offset, wp.transform)
+        self.retreat_offset_wp = wp.from_torch(self.retreat_offset, wp.transform)
         self.current_idx_objects_wp = wp.from_torch(self.current_idx_objects, wp.int32)
         self.dest_poses_wp = wp.from_torch(self.dest_poses, wp.transform)
 
@@ -259,6 +263,7 @@ class MirrorStateMachine:
                 self.des_ee_pose_wp,
                 self.des_gripper_state_wp,
                 self.offset_wp,
+                self.retreat_offset_wp,
                 self.current_idx_objects_wp,
                 self.position_threshold,
             ],

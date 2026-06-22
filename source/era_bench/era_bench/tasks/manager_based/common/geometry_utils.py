@@ -90,14 +90,24 @@ def sample_points_on_half_plane(
     table_pos: torch.Tensor,
     table_size_xy: torch.Tensor,
     number_of_objects: int,
-    min_separation: float = 0.1,
+    min_separation: float = 0.08,
 ) -> torch.Tensor:
     """
     Samples points on the half-plane defined by the line and the table boundaries.
     """
 
-    t_boundaries = intersect_line_rectangle(line_pos_xy, line_dir_xy, table_pos, table_size_xy)
     n_directions = normal_vectors(line_dir_xy)
+
+    # Restrict line samples to positions whose positive-normal half-plane still has
+    # at least min_separation of clearance inside the table.
+    offset_line_pos_xy = line_pos_xy + min_separation * n_directions
+    t_boundaries = intersect_line_rectangle(offset_line_pos_xy, line_dir_xy, table_pos, table_size_xy)
+
+    if (t_boundaries[:, 1] < t_boundaries[:, 0]).any():
+        raise ValueError(
+            "Not enough room to sample points with the requested min_separation from the line "
+            "on the selected half-plane."
+        )
 
     t = _sample_ts(env_ids, t_boundaries, number_of_objects, min_separation)  # (B, C)
     sampled_points = line_pos_xy.unsqueeze(1) + t.unsqueeze(-1) * line_dir_xy.unsqueeze(1)  # B, C, 2
@@ -105,6 +115,12 @@ def sample_points_on_half_plane(
     n_boundaries = intersect_line_rectangle(sampled_points.permute(1, 0, 2), n_directions, table_pos, table_size_xy)
     n_boundaries = n_boundaries.permute(1, 0, 2)
     n_boundaries[..., 0] = torch.clamp_min(n_boundaries[..., 0], min_separation)
+
+    invalid_mask = n_boundaries[..., 1] < n_boundaries[..., 0]
+    if invalid_mask.any():
+        feasible_upper = torch.clamp_min(n_boundaries[..., 1], 0.0)
+        n_boundaries[..., 0] = torch.where(invalid_mask, feasible_upper, n_boundaries[..., 0])
+        n_boundaries[..., 1] = torch.where(invalid_mask, feasible_upper, n_boundaries[..., 1])
 
     n = (
         torch.rand((len(env_ids), number_of_objects), device=table_pos.device)

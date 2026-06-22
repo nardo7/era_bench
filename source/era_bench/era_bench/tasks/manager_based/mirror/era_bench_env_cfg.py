@@ -147,8 +147,8 @@ class EventCfg:
         mode="reset",
         params={
             "pose_range": {
-                "x": (0.4, 0.6),
-                "y": (-0.1, 0.1),
+                "x": (0.5, 0.5),
+                "y": (0.0, 0.0),
                 "z": (0.02, 0.02),
                 "yaw": (-1.0, 1.0),
             },
@@ -209,7 +209,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # general settings
         self.decimation = 5
-        self.episode_length_s = 10.0
+        self.episode_length_s = 25.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render_interval = 2
