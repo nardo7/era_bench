@@ -38,6 +38,7 @@ def _xform_prim_world_size_meters(xform_prim: XFormPrim, device: str) -> torch.T
     for prim in xform_prim.prims:
         aligned_range = bbox_cache.ComputeWorldBound(prim).ComputeAlignedRange()
         size_list.append(list(aligned_range.GetSize()))
+    print(f"World size of {xform_prim.name}: {size_list}")
     return torch.tensor(size_list, dtype=torch.float32, device=device)
 
 

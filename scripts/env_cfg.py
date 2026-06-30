@@ -3,7 +3,7 @@ from typing import cast
 
 from isaaclab_tasks.utils import parse_env_cfg
 import os
-from era_bench.tasks.manager_based.mirror.mdp import RecorderManagerCfg
+from era_bench.tasks.manager_based.common.recorders import RecorderManagerCfg
 from era_bench.tasks.manager_based.mirror.era_bench_env_cfg import EraBenchEnvCfg
 from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
@@ -20,8 +20,8 @@ def configure_env(args_cli: Namespace) -> ManagerBasedRLEnvCfg:
     env_cfg: EraBenchEnvCfg = cast(
         EraBenchEnvCfg, parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     )
-    if not isinstance(env_cfg, EraBenchEnvCfg):
-        raise ValueError(f"Expected env_cfg to be of type EraBenchEnvCfg, but got {type(env_cfg)}")
+    # if not isinstance(env_cfg, EraBenchEnvCfg):
+    #     raise ValueError(f"Expected env_cfg to be of type EraBenchEnvCfg, but got {type(env_cfg)}")
 
     env_cfg.env_name = args_cli.task.split(":")[-1]
 

@@ -14,7 +14,6 @@ from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG  # isort: ski
 
 @configclass
 class EraBenchSceneCfg(InteractiveSceneCfg):
-    """Configuration for a cart-pole scene."""
 
     # robots: will be populated by agent env cfg
     robot: ArticulationCfg = FRANKA_PANDA_HIGH_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")  # type: ignore

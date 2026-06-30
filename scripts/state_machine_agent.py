@@ -166,17 +166,6 @@ def plan_with_fixed_yaw_candidates(
     candidate_poses = generate_yaw_candidates(target_position, base_quat, num_candidates=8)
     candidate_poses = torch.stack(candidate_poses, dim=0)
     return planner.plan_goalset(candidate_poses[:, :3], candidate_poses[:, 3:7])
-    # for candidate_index, candidate_pose in enumerate(candidate_poses, start=1):
-    #     candidate_matrix_pose = matrix_pose_from_pose(candidate_pose)
-    #     if planner.update_world_and_plan_motion(candidate_matrix_pose):
-    #         print(
-    #             "[INFO]: Planner: Selected yaw candidate "
-    #             f"{candidate_index}/{len(candidate_poses)} with quaternion {candidate_pose[3:7].tolist()}"
-    #         )
-    #         return True
-
-    # print(f"[INFO]: Planner: No feasible plan found across {len(candidate_poses)} fixed yaw candidates.")
-    # return False
 
 
 def main():
