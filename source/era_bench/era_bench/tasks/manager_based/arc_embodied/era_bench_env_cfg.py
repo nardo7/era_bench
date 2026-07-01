@@ -64,9 +64,9 @@ class ObservationsCfg:
         actions = ObsTerm(func=mdp.last_action)
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        object = ObsTerm(func=mdp.object_obs)
-        cube_positions = ObsTerm(func=mdp.cube_positions_in_world_frame)
-        cube_orientations = ObsTerm(func=mdp.cube_orientations_in_world_frame)
+        # object = ObsTerm(func=mdp.object_obs)
+        # cube_positions = ObsTerm(func=mdp.cube_positions_in_world_frame)
+        # cube_orientations = ObsTerm(func=mdp.cube_orientations_in_world_frame)
         eef_pos = ObsTerm(func=mdp.ee_frame_pos)
         eef_quat = ObsTerm(func=mdp.ee_frame_quat)
         gripper_pos = ObsTerm(func=mdp.gripper_pos)
@@ -90,26 +90,26 @@ class ObservationsCfg:
     class SubTasksCfg(ObsGroup):
         """Observations for sub-task groups."""
 
-        object_grasped = ObsTerm(
-            func=mdp.objects_grasped,
-            params={
-                "robot_cfg": SceneEntityCfg("robot"),
-                "ee_frame_cfg": SceneEntityCfg("ee_frame"),
-            },
-        )
-        object_placed = ObsTerm(
-            func=mdp.objects_placed,
-            params={
-                "robot_cfg": SceneEntityCfg("robot"),
-                "ee_frame_cfg": SceneEntityCfg("ee_frame"),
-                "xy_threshold": 0.04,
-                "height_threshold": 0.005,
-            },
-        )
+        # object_grasped = ObsTerm(
+        #     func=mdp.objects_grasped,
+        #     params={
+        #         "robot_cfg": SceneEntityCfg("robot"),
+        #         "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+        #     },
+        # )
+        # object_placed = ObsTerm(
+        #     func=mdp.objects_placed,
+        #     params={
+        #         "robot_cfg": SceneEntityCfg("robot"),
+        #         "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+        #         "xy_threshold": 0.04,
+        #         "height_threshold": 0.005,
+        #     },
+        # )
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
-    subtasks: SubTasksCfg = SubTasksCfg()
+    # subtasks: SubTasksCfg = SubTasksCfg()
 
 
 @configclass
@@ -146,28 +146,14 @@ class EventCfg:
         },
     )
 
-    randomize_line_pose = EventTerm(
-        func=mdp.randomize_object_pose,
-        mode="reset",
-        params={
-            "pose_range": {
-                "x": (0.5, 0.5),
-                "y": (0.0, 0.0),
-                "z": (0.02, 0.02),
-                "yaw": (-1.0, 1.0),
-            },
-            "asset_cfgs": [SceneEntityCfg("line")],
-        },
-    )
-
-    randomize_object_positions = EventTerm(
-        func=mdp.randomize_objects_pose_one_side_line_half_plane,
-        mode="reset",
-        params={
-            "min_separation": 0.05,
-            "line_cfg": SceneEntityCfg("line"),
-        },
-    )
+    # randomize_object_positions = EventTerm(
+    #     func=mdp.randomize_objects_pose_one_side_line_half_plane,
+    #     mode="reset",
+    #     params={
+    #         "min_separation": 0.05,
+    #         "line_cfg": SceneEntityCfg("line"),
+    #     },
+    # )
 
 
 @configclass
@@ -182,12 +168,12 @@ class TerminationsCfg:
     # (1) Time out
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    success = DoneTerm(
-        func=mdp.are_objects_mirrored,
-        params={
-            "middle_line_name": "line",
-        },
-    )
+    # success = DoneTerm(
+    #     func=mdp.are_objects_mirrored,
+    #     params={
+    #         "middle_line_name": "line",
+    #     },
+    # )
 
 
 ##
