@@ -1,4 +1,30 @@
+from collections.abc import Sequence
+
 import torch
+import isaaclab.sim as sim_utils
+from isaaclab.assets import RigidObject
+from isaacsim.core.prims import XFormPrim
+from pxr import Usd, UsdGeom
+
+
+def world_size_meters_from_prims(prims: Sequence[Usd.Prim], device: str) -> torch.Tensor:
+    """Returns world-axis-aligned sizes for a sequence of USD prims."""
+    bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_], useExtentsHint=True)
+    size_list = []
+    for prim in prims:
+        aligned_range = bbox_cache.ComputeWorldBound(prim).ComputeAlignedRange()
+        size_list.append(list(aligned_range.GetSize()))
+    return torch.tensor(size_list, dtype=torch.float32, device=device)
+
+
+def xform_prim_world_size_meters(xform_prim: XFormPrim, device: str) -> torch.Tensor:
+    """Returns world-axis-aligned sizes for all prims wrapped by an XFormPrim."""
+    return world_size_meters_from_prims(xform_prim.prims, device)
+
+
+def rigid_object_world_size_meters(rigid_object: RigidObject, device: str) -> torch.Tensor:
+    """Returns world-axis-aligned sizes for all prims matched by a RigidObject config."""
+    return world_size_meters_from_prims(sim_utils.find_matching_prims(rigid_object.cfg.prim_path), device)
 
 
 def intersect_line_rectangle(

@@ -40,11 +40,17 @@ class ArcStates(Enum):
         return obj
 
     REST = (0, wp.constant(0), wp.constant(0.1))
-    APPROACHING = (1, wp.constant(1), wp.constant(0.3))
-    GRASPING = (2, wp.constant(2), wp.constant(0.1))
+    APPROACHING = (1, wp.constant(1), wp.constant(0.1))
+    GRASPING = (2, wp.constant(2), wp.constant(0.3))
     APPROACHING_PLACING = (3, wp.constant(3), wp.constant(0.5))
-    PLACING = (4, wp.constant(4), wp.constant(0.1))
+    PLACING = (4, wp.constant(4), wp.constant(0.2))
     RETREATING = (5, wp.constant(5), wp.constant(0.1))
+
+    APPROACHING_ABOVE = (6, wp.constant(6), wp.constant(0.2))
+    RETREATING_ABOVE = (7, wp.constant(7), wp.constant(0.1))
+
+    APPROACHING_PLACING_ABOVE = (8, wp.constant(8), wp.constant(0.2))
+    RETREATING_PLACING_ABOVE = (9, wp.constant(9), wp.constant(0.1))
 
 
 COLOR_TO_INDEX = {
@@ -65,17 +71,10 @@ ARC_STATE_GRASPING = ArcStates.GRASPING.warp_value
 ARC_STATE_APPROACHING_PLACING = ArcStates.APPROACHING_PLACING.warp_value
 ARC_STATE_PLACING = ArcStates.PLACING.warp_value
 ARC_STATE_RETREATING = ArcStates.RETREATING.warp_value
-
-
-class ArcSmWaitTime:
-    """Wait times for the arc task state machine."""
-
-    REST = wp.constant(0.1)
-    APPROACHING = wp.constant(0.3)
-    GRASPING = wp.constant(0.1)
-    APPROACHING_PLACING = wp.constant(0.5)
-    PLACING = wp.constant(0.1)
-    RETREATING = wp.constant(0.1)
+ARC_STATE_APPROACHING_ABOVE = ArcStates.APPROACHING_ABOVE.warp_value
+ARC_STATE_RETREATING_ABOVE = ArcStates.RETREATING_ABOVE.warp_value
+ARC_STATE_APPROACHING_PLACING_ABOVE = ArcStates.APPROACHING_PLACING_ABOVE.warp_value
+ARC_STATE_RETREATING_PLACING_ABOVE = ArcStates.RETREATING_PLACING_ABOVE.warp_value
 
 
 def is_vec_t(vector_coord: wp.vec3) -> TypeGuard[wp.Scalar]:
@@ -87,6 +86,8 @@ def get_next_reserve_cube(
     next_idx: int, reserve_cube_stack: wp.array(dtype=wp.transform), num_reserve_cubes: int
 ) -> wp.transform:
     """Destack the next reserve cube index from the stack."""
+    if next_idx < 0:
+        next_idx = num_reserve_cubes - 1
     if next_idx >= num_reserve_cubes:
         next_idx = 0
     return reserve_cube_stack[next_idx]
@@ -101,7 +102,10 @@ def get_reserve_cube_stack(
 
 
 @wp.func
-def distance_below_threshold(current_pos: wp.vec3f, desired_pos: wp.vec3f, threshold: float) -> bool:
+def distance_below_threshold(current_pos: wp.vec3f, desired_pos: wp.vec3f, threshold: float, state: int) -> bool:
+    threshold = (
+        threshold if state == ARC_STATE_APPROACHING or state == ARC_STATE_APPROACHING_PLACING else threshold * 2.0
+    )  # double threshold for above states
     return wp.length(current_pos - desired_pos) < threshold
 
 
@@ -109,15 +113,23 @@ def distance_below_threshold(current_pos: wp.vec3f, desired_pos: wp.vec3f, thres
 def get_state_config(state: int) -> tuple[float, int]:
     """Get wait time and next state for current state."""
     if state == ARC_STATE_REST:  # REST
-        return 0.1, ARC_STATE_APPROACHING
+        return 0.1, ARC_STATE_APPROACHING_ABOVE
+    elif state == ARC_STATE_APPROACHING_ABOVE:  # APPROACHING_ABOVE
+        return 0.2, ARC_STATE_APPROACHING
     elif state == ARC_STATE_APPROACHING:  # APPROACHING
         return 0.3, ARC_STATE_GRASPING
     elif state == ARC_STATE_GRASPING:  # GRASPING
-        return 0.1, ARC_STATE_APPROACHING_PLACING
+        return 0.1, ARC_STATE_RETREATING_ABOVE
+    elif state == ARC_STATE_RETREATING_ABOVE:  # RETREATING_ABOVE
+        return 0.1, ARC_STATE_APPROACHING_PLACING_ABOVE
+    elif state == ARC_STATE_APPROACHING_PLACING_ABOVE:  # APPROACHING_PLACING_ABOVE
+        return 0.2, ARC_STATE_APPROACHING_PLACING
     elif state == ARC_STATE_APPROACHING_PLACING:  # APPROACHING_PLACING
         return 0.5, ARC_STATE_PLACING
     elif state == ARC_STATE_PLACING:  # PLACING
-        return 0.1, ARC_STATE_REST  # ARC_STATE_RETREATING
+        return 0.1, ARC_STATE_RETREATING_PLACING_ABOVE
+    elif state == ARC_STATE_RETREATING_PLACING_ABOVE:  # RETREATING_PLACING_ABOVE
+        return 0.1, ARC_STATE_REST
     else:  # RETREATING (state == ARC_STATE_RETREATING)
         return 0.1, ARC_STATE_REST
 
@@ -134,6 +146,7 @@ def arc_state_machine_kernel(
     des_gripper_state: wp.array(dtype=float),  # pyright: ignore[reportInvalidTypeForm]
     offset: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     retreat_offset: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
+    retreat_offset_reserve: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     current_goal_objects: wp.array(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     reserve_cube_poses_idx_wp: wp.array2d(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     position_threshold: float,
@@ -155,9 +168,12 @@ def arc_state_machine_kernel(
             wp.transform_get_translation(ee_pose[tid]),
             wp.transform_get_translation(des_ee_pose[tid]),
             position_threshold,
+            state,
         )
-        if state == ARC_STATE_APPROACHING
-        or state == ARC_STATE_APPROACHING_PLACING  # APPROACHING or APPROACHING_PLACING
+        if state == ARC_STATE_APPROACHING_ABOVE
+        or state == ARC_STATE_APPROACHING
+        or state == ARC_STATE_APPROACHING_PLACING_ABOVE
+        or state == ARC_STATE_APPROACHING_PLACING  # approach states require distance check
         else condition
     )
 
@@ -176,20 +192,38 @@ def arc_state_machine_kernel(
         des_gripper_state[tid] = GripperState.OPEN
         des_ee_pose[tid] = ee_pose[tid]
 
-    elif state == ARC_STATE_APPROACHING:
+    elif state == ARC_STATE_APPROACHING_ABOVE:
         des_gripper_state[tid] = GripperState.OPEN
         current_stack = get_reserve_cube_stack(tid, color_idx, reserve_cube_poses_stacks)
-
         object_position = wp.transform_get_translation(
             get_next_reserve_cube(reserve_cube_idx, current_stack, wp.len(current_stack))
         )
         desired_grasp_orientation = wp.transform_get_rotation(desired_goal_poses[tid, current_goal_object_idx])
         approach_pose = wp.transform(object_position, desired_grasp_orientation)
-        des_ee_pose[tid] = wp.transform_multiply(offset[tid], approach_pose)
+        des_ee_pose[tid] = wp.transform_multiply(retreat_offset_reserve[tid], approach_pose)  # +0.2m above object
+
+    elif state == ARC_STATE_APPROACHING:
+        des_gripper_state[tid] = GripperState.OPEN
+        current_stack = get_reserve_cube_stack(tid, color_idx, reserve_cube_poses_stacks)
+        object_position = wp.transform_get_translation(
+            get_next_reserve_cube(reserve_cube_idx, current_stack, wp.len(current_stack))
+        )
+        desired_grasp_orientation = wp.transform_get_rotation(desired_goal_poses[tid, current_goal_object_idx])
+        approach_pose = wp.transform(object_position, desired_grasp_orientation)
+        des_ee_pose[tid] = wp.transform_multiply(offset[tid], approach_pose)  # +0.1m above object
 
     elif state == ARC_STATE_GRASPING:
         des_gripper_state[tid] = GripperState.CLOSE
         des_ee_pose[tid] = ee_pose[tid]
+
+    elif state == ARC_STATE_RETREATING_ABOVE:
+        des_gripper_state[tid] = GripperState.CLOSE
+        des_ee_pose[tid] = wp.transform_multiply(retreat_offset_reserve[tid], ee_pose[tid])  # lift +0.2m
+
+    elif state == ARC_STATE_APPROACHING_PLACING_ABOVE:
+        des_gripper_state[tid] = GripperState.CLOSE
+
+        des_ee_pose[tid] = wp.transform_multiply(retreat_offset[tid], desired_goal_poses[tid, current_goal_object_idx])
 
     elif state == ARC_STATE_APPROACHING_PLACING:
         des_gripper_state[tid] = GripperState.CLOSE
@@ -198,6 +232,10 @@ def arc_state_machine_kernel(
     elif state == ARC_STATE_PLACING:
         des_gripper_state[tid] = GripperState.OPEN
         des_ee_pose[tid] = ee_pose[tid]
+
+    elif state == ARC_STATE_RETREATING_PLACING_ABOVE:
+        des_gripper_state[tid] = GripperState.OPEN
+        des_ee_pose[tid] = wp.transform_multiply(retreat_offset[tid], ee_pose[tid])  # lift +0.2m after placing
 
     elif state == ARC_STATE_RETREATING:
         des_gripper_state[tid] = GripperState.OPEN
@@ -221,7 +259,7 @@ class ArcStateMachine:
 
     @staticmethod
     def _convert_pose_tensor_for_warp(pose_tensor: torch.Tensor) -> torch.Tensor:
-        return pose_tensor[:, :, [0, 1, 2, 6, 3, 4, 5]]
+        return pose_tensor[:, :, [0, 1, 2, 4, 5, 6, 3]]  # convert from (w, x, y, z) to (x, y, z, w) for warp kernel use
 
     @staticmethod
     def _flatten_color_pose_dict(
@@ -257,6 +295,8 @@ class ArcStateMachine:
         reserve_cubes_poses: dict[
             ArcColors, torch.Tensor
         ],  # color -> (num_envs, num_reserve_cubes, 7) tensor of reserve cube positions
+        cube_sizes: tuple[float, float, float],
+        cubes_per_stack: int,
         device: torch.device = torch.device("cpu"),
         position_threshold: float = 0.01,
         debug_shapes: bool = False,
@@ -286,10 +326,15 @@ class ArcStateMachine:
         )
         # save reserve cubes positions
         self.reserve_cubes_poses = {k: self._convert_pose_tensor_for_warp(v) for k, v in reserve_cubes_poses.items()}
-        self.reserve_cube_poses_idx = (
-            torch.ones((self.num_envs, len(reserve_cubes_poses.keys())), dtype=torch.int32, device=device) * -1
-        )  # initialize to -1 to indicate start at the end
-        print(f"[INFO]: Reserve cube poses idx: {self.reserve_cube_poses_idx}")
+        reserve_cubes_stacked = torch.stack(list(self.reserve_cubes_poses.values()), dim=0).permute(1, 0, 2, 3)
+        print(f"[INFO]: Reserve cube poses: {reserve_cubes_poses}")
+        initial_stack_idx = next(iter(reserve_cubes_poses.values())).shape[1] - 1
+        self.reserve_cube_poses_idx = torch.full(
+            (self.num_envs, len(reserve_cubes_poses.keys())),
+            initial_stack_idx,
+            dtype=torch.int32,
+            device=device,
+        )
 
         # initialize state machine
         self.sm_dt = torch.full((self.num_envs,), self.dt, device=device)
@@ -304,11 +349,19 @@ class ArcStateMachine:
         # approach above object offset
         self.offset = torch.zeros((self.num_envs, 7), device=device)
         self.retreat_offset = torch.zeros((self.num_envs, 7), device=device)
-        # set offset 0.1m above the object
-        self.offset[:, 2] = 0.1
+        self.retreat_offset_reserve = torch.zeros((self.num_envs, 7), device=device)
+
+        cube_stacks_max_height = cubes_per_stack * cube_sizes[-1]  # max height of stacked cubes
+        print(f"[INFO]: Cube stacks max height: {cube_stacks_max_height}")
+
+        self.offset[:, 2] = 0
         self.offset[:, -1] = 1.0  # warp expects quaternion as (x, y, z, w)
         self.retreat_offset[:, 2] = 0.2  # retreat 0.2m above the current position
         self.retreat_offset[:, -1] = 1.0  # convert to (x, y, z, w) for warp kernel use
+        self.retreat_offset_reserve[:, 2] = (
+            cube_sizes[-1] * 0.5 + cube_stacks_max_height
+        )  # retreat 0.2m above the reserve cube stack
+        self.retreat_offset_reserve[:, -1] = 1.0  # convert
 
         # convert to warp
         self.sm_dt_wp = wp.from_torch(self.sm_dt, wp.float32)
@@ -321,9 +374,9 @@ class ArcStateMachine:
         self.current_idx_objects_wp = wp.from_torch(self.current_idx_objects, wp.int32)
         self.dest_poses_wp = wp.from_torch(self.dest_poses, wp.transform)
         self.dest_pose_colors_wp = wp.from_torch(self.dest_pose_colors, wp.int32)
-        reserve_cubes_stacked = torch.stack(list(self.reserve_cubes_poses.values()), dim=0).permute(1, 0, 2, 3)
         self.reserve_cubes_poses_wp = wp.from_torch(reserve_cubes_stacked, wp.transform)
         self.reserve_cube_poses_idx_wp = wp.from_torch(self.reserve_cube_poses_idx, wp.int32)
+        self.retreat_offset_reserve_wp = wp.from_torch(self.retreat_offset_reserve, wp.transform)
 
         if self.debug_shapes:
             self._log_shape("dest_poses_warp_order", self.dest_poses)
@@ -407,6 +460,7 @@ class ArcStateMachine:
                 self.des_gripper_state_wp,
                 self.offset_wp,
                 self.retreat_offset_wp,
+                self.retreat_offset_reserve_wp,
                 self.current_idx_objects_wp,
                 self.reserve_cube_poses_idx_wp,
                 self.position_threshold,

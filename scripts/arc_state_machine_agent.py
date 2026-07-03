@@ -41,14 +41,19 @@ from isaaclab.envs import ManagerBasedRLEnv, VecEnvObs
 from env_cfg import configure_env, configure_curobo_planner
 from isaaclab.sensors import FrameTransformer
 import isaaclab.utils.math as math_utils
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.assets import RigidObject
 from isaaclab_mimic.motion_planners.curobo.curobo_planner import CuroboPlanner
 from era_bench.tasks.manager_based.arc_embodied.arc_state_machine import ArcStates
 from era_bench.curobo_planner_extended import ExtendedCuroboPlanner
 from era_bench.tasks.manager_based.arc_embodied import mdp
 from era_bench.tasks.manager_based.arc_embodied.arc_state_machine import ArcStateMachine
+from era_bench.tasks.manager_based.arc_embodied.ik_recovery_policy import ArcIKRecoveryPolicy
+from era_bench.tasks.manager_based.arc_embodied.ik_watchdog import ArcIKWatchdog
 from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
 import era_bench.tasks  # noqa: F401
 import random
+from era_bench.tasks.manager_based.common.geometry_utils import rigid_object_world_size_meters
 
 
 def target_eef_pose_to_action(
@@ -189,55 +194,96 @@ def main():
     # reset environment
     env.reset()
     # configure curobo planner
-    planner = configure_curobo_planner(env, args_cli.task, env_id=0)
+    # planner = configure_curobo_planner(env, args_cli.task, env_id=0)
     if env.action_space.shape is None:
         raise ValueError("Expected action space to be continuous, but got: {env.action_space}")
     scene_cfg = cast(EraBenchSceneCfg, env.scene.cfg)
 
     # desired object orientation (we only do position control of object)
-    desired_orientation = torch.zeros((env.num_envs, 4), device=env.device)
-    desired_orientation[:, 1] = 1.0
+    desired_orientation = torch.zeros((env.num_envs, 3, 4), device=env.device)
+    desired_orientation[:, :, 1] = 1.0
     reserve_cube_stacks = scene_cfg.get_reserve_cube_stacks()
     reserve_cube_stacks = {
         color: stack.to(env.device).expand(env.num_envs, -1, -1) for color, stack in reserve_cube_stacks.items()
     }
 
-    dest_poses = mdp.sample_object_poses(
-        2,
-        scene_cfg.separation_distance,
-        {
-            "x": (-0.75, -0.2),
-            "y": (0.2, 0.75),
-            "z": (0.02, 0.02),
-            "roll": (0.0, 0.0),
-            "pitch": (0.0, 0.0),
-            "yaw": (0.0, 0.0),
-        },
+    dest_poses = (
+        torch.tensor(
+            [
+                [0.0, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0],
+                [-0.335, 0.73, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0],
+                [0.335, 0.73, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0],
+            ],
+            device=env.device,
+        )
+        .unsqueeze(0)
+        .expand(env.num_envs, -1, -1)
     )
-    dest_poses = torch.tensor(dest_poses, device=env.device).unsqueeze(0).expand(env.num_envs, -1, -1)
+    # = mdp.sample_object_poses(
+    #     3,
+    #     scene_cfg.separation_distance,
+    #     {
+    #         "x": (0.34, 0.34),
+    #         "y": (0.73, 0.73),
+    #         "z": (0.0125, 0.0125),
+    #         "roll": (0.0, 0.0),
+    #         "pitch": (0.0, 0.0),
+    #         "yaw": (0.0, 0.0),
+    #     },
+    # )
+    # dest_poses = torch.tensor(dest_poses, device=env.device).unsqueeze(0).expand(env.num_envs, -1, -1)
     positions = dest_poses[..., :3]
     orientations = math_utils.quat_from_euler_xyz(dest_poses[..., 3], dest_poses[..., 4], dest_poses[..., 5])
-    dest_poses = torch.cat((positions, orientations), dim=-1)
+    dest_poses = torch.cat((positions, desired_orientation), dim=-1)
+    # dest_poses[:, :, 1] = 1
 
     print(f"[INFO]: Sampled destination poses: {dest_poses}")
     possible_colors = set(scene_cfg.get_reserve_cube_colors())
 
-    colors = random.choices(list(possible_colors), k=len(dest_poses))
-    dest_poses_by_color = {color: torch.tensor(dest_poses[i]).unsqueeze(0) for i, color in enumerate(colors)}
+    colors = [scene_cfg.get_reserve_cube_colors()[-1]] * dest_poses.shape[1]
+    pairs = list(zip(colors, dest_poses.permute(1, 0, 2)))
+    dest_poses_by_color = {}
+    for color in possible_colors:
+        color_poses = [pose for c, pose in pairs if c == color]
+        if color_poses:
+            dest_poses_by_color[color] = torch.stack(color_poses, dim=0).permute(1, 0, 2)
+        else:
+            dest_poses_by_color[color] = torch.empty((env.num_envs, 0, dest_poses.shape[-1]), device=env.device)
     print(f"[INFO]: Destination poses by color: {dest_poses_by_color}")
     arc_sm = ArcStateMachine(
         dt=env_cfg.sim.dt * env_cfg.decimation,
         num_envs=env.num_envs,
         dest_poses=dest_poses_by_color,
         device=env.device,  # pyright: ignore[reportArgumentType]
-        position_threshold=0.03,
+        position_threshold=0.01,
         reserve_cubes_poses=reserve_cube_stacks,
+        cube_sizes=scene_cfg.cubes_size,
+        cubes_per_stack=int(scene_cfg.reserve_cubes_amount_per_color / scene_cfg.reserve_cubes_amount_per_line),
+    )
+    place_above_watchdog = ArcIKWatchdog(
+        num_envs=env.num_envs,
+        device=env.device,
+        patience=10,
+        min_improvement=1e-3,
+        divergence_ratio=1.25,
+        warmup_steps=3,
+    )
+    place_above_recovery = ArcIKRecoveryPolicy(
+        num_envs=env.num_envs,
+        device=env.device,
+        session_label=args_cli.task,
     )
 
+    cube_name = scene_cfg.get_reserve_cube_name(color=colors[0], index=0)
+    cube_cfg = SceneEntityCfg(cube_name)
+    cube: RigidObject = env.scene[cube_cfg.name]
+    size = rigid_object_world_size_meters(cube, device=env.device)
+    print(f"[INFO]: Reserve cube {cube_name} world size: {size.tolist()}")
     # simulate environment
     step = 0
     state_steps = 0
     start = time.time()
+    print(f"[INFO]: Arc IK recovery log file: {place_above_recovery.log_path}")
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
@@ -258,43 +304,55 @@ def main():
             plan_success = False
 
             print(f"[INFO]: ArcStateMachine: Current state: {ArcStates(arc_state[0].item())}")
+            watchdog_update = place_above_watchdog.update(arc_state, tcp_rest_position[:, :3], next_pose)
+            for warning_message in watchdog_update.warning_messages:
+                print(warning_message)
+            recovery_update = place_above_recovery.update(
+                arc_state,
+                tcp_rest_position[:, :3],
+                tcp_rest_orientation,
+                next_pose,
+                watchdog_update,
+                step=step,
+                elapsed_s=time.time() - start,
+            )
             # this supports only one environment for now
-            if arc_state[0] in [
-                ArcStates.APPROACHING.python_value,
-                ArcStates.APPROACHING_PLACING.python_value,
-                ArcStates.RETREATING.python_value,
-            ]:
-                next_pose = next_pose[0]
-                if arc_state[0] == ArcStates.APPROACHING.python_value:
-                    grasp_base_quat = desired_orientation[0]
-                    plan_success = plan_with_fixed_yaw_candidates(planner, next_pose[:3], grasp_base_quat)
-                else:
-                    if arc_state[0] == ArcStates.APPROACHING_PLACING.python_value:
+            # if arc_state[0] in [
+            #     ArcStates.APPROACHING.python_value,
+            #     ArcStates.APPROACHING_PLACING.python_value,
+            #     ArcStates.RETREATING.python_value,
+            # ]:
+            #     next_pose = next_pose[0]
+            #     if arc_state[0] == ArcStates.APPROACHING.python_value:
+            #         grasp_base_quat = desired_orientation[0]
+            #         plan_success = plan_with_fixed_yaw_candidates(planner, next_pose[:3], grasp_base_quat)
+            #     else:
+            #         if arc_state[0] == ArcStates.APPROACHING_PLACING.python_value:
 
-                        next_pose = torch.cat(
-                            (next_pose[:3], tcp_rest_orientation[0], next_pose[-1].unsqueeze(-1)), dim=0
-                        )
+            #             next_pose = torch.cat(
+            #                 (next_pose[:3], tcp_rest_orientation[0], next_pose[-1].unsqueeze(-1)), dim=0
+            #             )
 
-                    matrix_pose = matrix_pose_from_pose(next_pose[:-1])
-                    plan_success = planner.update_world_and_plan_motion(
-                        matrix_pose,
-                        expected_attached_object=(
-                            scene_cfg.get_reserve_cube_name(
-                                color=arc_sm.get_current_goal_color(0), index=arc_sm.get_current_stack_index(0)
-                            )
-                            if arc_state[0] == ArcStates.APPROACHING_PLACING.python_value
-                            else None
-                        ),
-                    )
-                next_pose = next_pose.unsqueeze(0)
+            #         matrix_pose = matrix_pose_from_pose(next_pose[:-1])
+            #         plan_success = planner.update_world_and_plan_motion(
+            #             matrix_pose,
+            #             expected_attached_object=(
+            #                 scene_cfg.get_reserve_cube_name(
+            #                     color=arc_sm.get_current_goal_color(0), index=arc_sm.get_current_stack_index(0)
+            #                 )
+            #                 if arc_state[0] == ArcStates.APPROACHING_PLACING.python_value
+            #                 else None
+            #             ),
+            #         )
+            #     next_pose = next_pose.unsqueeze(0)
 
             if not plan_success:
-                print("[INFO]: Skipping execution for this state-machine step.")
+                print("[WARNING]: Skipping execution for this state-machine step with CUROBO. trying with plain IK.")
                 current_pose = torch.cat(
                     (tcp_rest_position, tcp_rest_orientation, next_pose[:, -1].unsqueeze(-1)), dim=-1
                 )
 
-                obs, reward, terminated, truncated, info = env.step(current_pose)
+                obs, reward, terminated, truncated, info = env.step(recovery_update.command)
                 state_steps = 1
             else:
                 obs, reward, terminated, truncated, info, state_steps = execute_plan(env, planner, next_pose[0, -1])
@@ -308,6 +366,9 @@ def main():
 
         if dones.any():
             print(f"[INFO]: Resetting environments {torch.where(dones)[0].tolist()} after episode completion.")
+            done_env_ids = torch.where(dones)[0]
+            place_above_watchdog.reset(done_env_ids)
+            place_above_recovery.reset(done_env_ids)
             arc_sm.reset_idx(torch.where(dones)[0].tolist())
             env.scene.reset(torch.where(dones)[0].tolist())
 

@@ -22,7 +22,7 @@ from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsA
 from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 
 from . import mdp
-from .scene_cfg import EraBenchSceneCfg
+from .scene_cfg import FRANKA_GRASP_CENTER_OFFSET, EraBenchSceneCfg
 
 ##
 # Scene definition
@@ -43,7 +43,7 @@ class ActionsCfg:
         joint_names=["panda_joint.*"],
         body_name="panda_hand",
         controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
-        body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
+        body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=FRANKA_GRASP_CENTER_OFFSET),
     )
     gripper_action: mdp.BinaryJointPositionActionCfg = mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
@@ -199,7 +199,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # general settings
         self.decimation = 5
-        self.episode_length_s = 10.0
+        self.episode_length_s = 15.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render_interval = 2
@@ -233,7 +233,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
                     prim_path="{ENV_REGEX_NS}/Robot/panda_hand",
                     name="end_effector",
                     offset=OffsetCfg(
-                        pos=(0.0, 0.0, 0.0),
+                        pos=FRANKA_GRASP_CENTER_OFFSET,
                     ),
                 ),
                 FrameTransformerCfg.FrameCfg(
