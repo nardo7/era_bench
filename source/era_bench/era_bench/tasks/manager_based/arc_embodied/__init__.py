@@ -14,7 +14,7 @@ from . import agents
 
 gym.register(
     id="ARC-Embodied-Era-Bench-v0",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point=f"{__name__}.era_bench_env:EraBenchEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.era_bench_env_cfg:EraBenchEnvCfg",

@@ -43,7 +43,7 @@ class ArcStates(Enum):
     APPROACHING = (1, wp.constant(1), wp.constant(0.1))
     GRASPING = (2, wp.constant(2), wp.constant(0.3))
     APPROACHING_PLACING = (3, wp.constant(3), wp.constant(0.5))
-    PLACING = (4, wp.constant(4), wp.constant(0.2))
+    PLACING = (4, wp.constant(4), wp.constant(0.3))
     RETREATING = (5, wp.constant(5), wp.constant(0.1))
 
     APPROACHING_ABOVE = (6, wp.constant(6), wp.constant(0.2))
@@ -119,7 +119,7 @@ def get_state_config(state: int) -> tuple[float, int]:
     elif state == ARC_STATE_APPROACHING:  # APPROACHING
         return 0.3, ARC_STATE_GRASPING
     elif state == ARC_STATE_GRASPING:  # GRASPING
-        return 0.1, ARC_STATE_RETREATING_ABOVE
+        return 0.2, ARC_STATE_RETREATING_ABOVE
     elif state == ARC_STATE_RETREATING_ABOVE:  # RETREATING_ABOVE
         return 0.1, ARC_STATE_APPROACHING_PLACING_ABOVE
     elif state == ARC_STATE_APPROACHING_PLACING_ABOVE:  # APPROACHING_PLACING_ABOVE
@@ -127,7 +127,7 @@ def get_state_config(state: int) -> tuple[float, int]:
     elif state == ARC_STATE_APPROACHING_PLACING:  # APPROACHING_PLACING
         return 0.5, ARC_STATE_PLACING
     elif state == ARC_STATE_PLACING:  # PLACING
-        return 0.1, ARC_STATE_RETREATING_PLACING_ABOVE
+        return 0.4, ARC_STATE_RETREATING_PLACING_ABOVE
     elif state == ARC_STATE_RETREATING_PLACING_ABOVE:  # RETREATING_PLACING_ABOVE
         return 0.1, ARC_STATE_REST
     else:  # RETREATING (state == ARC_STATE_RETREATING)
@@ -236,11 +236,6 @@ def arc_state_machine_kernel(
     elif state == ARC_STATE_RETREATING_PLACING_ABOVE:
         des_gripper_state[tid] = GripperState.OPEN
         des_ee_pose[tid] = wp.transform_multiply(retreat_offset[tid], ee_pose[tid])  # lift +0.2m after placing
-
-    elif state == ARC_STATE_RETREATING:
-        des_gripper_state[tid] = GripperState.OPEN
-        des_ee_pose[tid] = wp.transform_multiply(retreat_offset[tid], ee_pose[tid])
-
 
 class ArcStateMachine:
 

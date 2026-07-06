@@ -4,11 +4,12 @@ import torch
 from typing import TYPE_CHECKING, cast
 
 from era_bench.tasks.manager_based.common.geometry_utils import mirror_points_across_line
-from era_bench.tasks.manager_based.mirror.scene_cfg import EraBenchSceneCfg
+from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
 from isaaclab.assets import RigidObject
 from ...common.utils import line_direction_xy_from_quat
 
 if TYPE_CHECKING:
+    from era_bench.tasks.manager_based.arc_embodied.era_bench_env import EraBenchEnv
     from isaaclab.envs import ManagerBasedRLEnv
 
 
@@ -21,6 +22,113 @@ def _signed_distance_to_line(
         line_dir_xy[:, 0].unsqueeze(1) * points_to_line[:, :, 1]
         - line_dir_xy[:, 1].unsqueeze(1) * points_to_line[:, :, 0]
     )
+
+
+def are_objects_in_success_positions(
+    env: EraBenchEnv,
+    distance_threshold: float = 0.01,
+) -> torch.Tensor:
+    """Check if reserve cubes are close to color-matched success positions.
+
+    Supports ragged targets per environment (different number of target positions
+    in each env) by padding and masking targets in a batched computation.
+
+    For each color, it computes all pairwise distances between reserve cubes and
+    target positions, sorts distances ascending, and verifies that the first
+    ``num_targets[env]`` distances are below ``distance_threshold`` for each env.
+    """
+    scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
+    del scene_cfg  # Kept for parity with other terminations and typing context.
+
+    success_positions = env.success_positions
+    if not success_positions:
+        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def _as_env_major_positions(positions: torch.Tensor) -> torch.Tensor:
+        """Normalize positions to shape [num_envs, num_points, dim]."""
+        if positions.ndim == 2:
+            positions = positions.unsqueeze(1)
+        if positions.shape[0] == env.num_envs:
+            return positions
+        if positions.ndim >= 2 and positions.shape[1] == env.num_envs:
+            return positions.transpose(0, 1)
+        raise ValueError(f"Unexpected position tensor shape {tuple(positions.shape)} for {env.num_envs} envs.")
+
+    def _targets_to_padded_env_major(
+        targets: list[torch.Tensor] | torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return padded planar targets [E, T_max, 2] and valid-counts [E]."""
+        if isinstance(targets, torch.Tensor):
+            env_major = _as_env_major_positions(targets)[..., :2]
+            counts = torch.full((env.num_envs,), env_major.shape[1], device=env.device, dtype=torch.long)
+            return env_major, counts
+
+        if len(targets) != env.num_envs:
+            raise ValueError(f"Ragged target list must have length {env.num_envs}, got {len(targets)}.")
+
+        counts_list: list[int] = []
+
+        for t in targets:
+            t_dev = t.to(device=env.device)
+            if t_dev.ndim == 1:
+                t_dev = t_dev.unsqueeze(0)
+            elif t_dev.ndim > 2:
+                raise ValueError(f"Unexpected ragged target tensor shape {tuple(t_dev.shape)}.")
+            counts_list.append(t_dev.shape[0])
+
+        counts = torch.tensor(counts_list, device=env.device, dtype=torch.long)
+        max_targets = int(counts.max().item()) if counts.numel() > 0 else 0
+        padded = torch.zeros((env.num_envs, max_targets, 2), device=env.device)
+        for env_id, t in enumerate(targets):
+            t_dev = t.to(device=env.device)
+            if t_dev.ndim == 1:
+                t_dev = t_dev.unsqueeze(0)
+            if t_dev.shape[0] > 0:
+                padded[env_id, : t_dev.shape[0]] = t_dev[..., :2]
+        return padded, counts
+
+    reserve_cubes_by_color = env.get_reserve_cubes_positions_by_color()
+    success_mask = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+
+    for color, target_entries in success_positions.items():
+        if len(target_entries) == 0:
+            continue
+
+        target_positions, num_targets = _targets_to_padded_env_major(target_entries)
+        if target_positions.shape[1] == 0:
+            continue
+
+        reserve_positions_raw = reserve_cubes_by_color.get(color)
+        if reserve_positions_raw is None:
+            success_mask &= num_targets == 0
+            continue
+
+        reserve_positions = _as_env_major_positions(reserve_positions_raw)[..., :2]
+        num_reserve = reserve_positions.shape[1]
+        if num_reserve == 0:
+            success_mask &= num_targets == 0
+            continue
+
+        # Pairwise planar distances per env: [E, num_targets_max, num_reserve]
+        distances = torch.cdist(target_positions, reserve_positions, p=2)
+        target_valid_mask = torch.arange(target_positions.shape[1], device=env.device).unsqueeze(
+            0
+        ) < num_targets.unsqueeze(1)
+        # For each target, keep only its closest reserve cube: [E, num_targets_max]
+        closest_distances = torch.min(distances, dim=2).values
+
+        within_thresh = closest_distances <= distance_threshold
+        selected_within_thresh = torch.where(target_valid_mask, within_thresh, torch.ones_like(within_thresh))
+        print(
+            f"[DEBUG]: Color {color}: selected_within_thresh = {selected_within_thresh}, num_targets = {num_targets}, num_reserve = {num_reserve}"
+        )
+        color_success = torch.all(selected_within_thresh, dim=1)
+
+        has_enough_pairs = num_reserve >= num_targets
+        color_success &= has_enough_pairs
+        success_mask &= color_success
+
+    return success_mask
 
 
 def are_objects_mirrored(

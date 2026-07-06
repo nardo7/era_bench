@@ -146,14 +146,7 @@ class EventCfg:
         },
     )
 
-    # randomize_object_positions = EventTerm(
-    #     func=mdp.randomize_objects_pose_one_side_line_half_plane,
-    #     mode="reset",
-    #     params={
-    #         "min_separation": 0.05,
-    #         "line_cfg": SceneEntityCfg("line"),
-    #     },
-    # )
+    sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
 
 
 @configclass
@@ -168,12 +161,9 @@ class TerminationsCfg:
     # (1) Time out
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    # success = DoneTerm(
-    #     func=mdp.are_objects_mirrored,
-    #     params={
-    #         "middle_line_name": "line",
-    #     },
-    # )
+    success = DoneTerm(
+        func=mdp.are_objects_in_success_positions,
+    )
 
 
 ##
@@ -199,7 +189,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # general settings
         self.decimation = 5
-        self.episode_length_s = 15.0
+        self.episode_length_s = 10.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render_interval = 2

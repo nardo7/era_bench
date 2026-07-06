@@ -163,7 +163,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
             cube_cfg.spawn.visual_material = self._cube_visual_material(colors[color_idx])
 
     def initialize_reserve_cubes(self, colors: list[Colors] = DEFAULT_COLORS) -> None:
-        x_offsets = [0.40]  # , 0.55]
+        x_offsets = [0.30]  # , 0.55]
         y_offsets = [-0.1, 0.1]
         base_cube_center_height = self.cubes_size[2] * 0.5
         reserve_cube_rigid_props = sim_utils.RigidBodyPropertiesCfg(
@@ -251,6 +251,13 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     def get_reserve_cube_name(self, color: Colors, index: int) -> str:
         """Get the name of a reserve cube given its color and index."""
         return f"reserve_cube_{color.value}_{index+1}"
+
+    def get_reserve_cube_color(self, cube_name: str) -> Colors:
+        """Get the color of a reserve cube given its name."""
+        parts = cube_name.split("_")
+        if len(parts) < 4:
+            raise ValueError(f"Invalid reserve cube name: {cube_name}")
+        return Colors(parts[2])
 
     def __post_init__(self):
         # return

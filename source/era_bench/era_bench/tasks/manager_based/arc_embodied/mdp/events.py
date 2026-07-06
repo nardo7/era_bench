@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from typing import TYPE_CHECKING, TypeAlias, TypeGuard, cast
 
+from era_bench.tasks.manager_based.arc_embodied.config import Colors
 from isaacsim.core.utils.extensions import enable_extension
 
 import isaaclab.utils.math as math_utils
@@ -24,6 +25,7 @@ from pxr import Usd, UsdGeom
 from ...common.geometry_utils import sample_points_on_half_plane
 
 if TYPE_CHECKING:
+    from ..era_bench_env import EraBenchEnv
     from isaaclab.envs import ManagerBasedEnv
 
 
@@ -64,6 +66,42 @@ def _normalize_pose_range(
 
     # TypeGuard narrows the true branch; cast once here for the complementary case.
     return cast(PerEnvPoseAxisRanges, pose_range)
+
+
+def sample_success_positions(
+    env: EraBenchEnv,
+    env_ids: list[int],
+):
+    scene_cfg = env.cfg.scene
+    # if len(env.success_positions.keys()) == 0:
+    #     env.success_positions =
+    dest_poses = (
+        torch.tensor(
+            [
+                [0.0, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.335, 0.73, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [0.335, 0.73, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+            ],
+            device=env.device,
+        )
+        .unsqueeze(0)
+        .expand(env.num_envs, -1, -1)
+    )
+
+    possible_colors = set(scene_cfg.get_reserve_cube_colors())
+    colors = [scene_cfg.get_reserve_cube_colors()[-1]] * dest_poses.shape[1]
+    pairs = list(zip(colors, dest_poses.permute(1, 0, 2)))
+    dest_poses_by_color: dict[Colors, torch.Tensor] = {}
+    for color in possible_colors:
+        color_poses = [pose for c, pose in pairs if c == color]
+        if color_poses:
+            dest_poses_by_color[color] = torch.stack(color_poses, dim=0).permute(1, 0, 2)
+        else:
+            dest_poses_by_color[color] = torch.empty((env.num_envs, 0, dest_poses.shape[-1]), device=env.device)
+    env.success_positions = {
+        color: [cube_pose for cube_pose in dest_poses_by_color[color]] for color in dest_poses_by_color
+    }
+    print(f"[INFO]: Destination poses by color: {env.success_positions}")
 
 
 def set_default_joint_pose(
