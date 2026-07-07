@@ -129,7 +129,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     @property
     def cubes_size(self) -> tuple[float, float, float]:
         """Size of cubes used in this scene config."""
-        return (0.05, 0.05, 0.05)  # (x, y, z) in meters
+        return (0.04, 0.04, 0.04)  # (x, y, z) in meters
 
     @property
     def separation_distance(self) -> float:
@@ -163,7 +163,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
             cube_cfg.spawn.visual_material = self._cube_visual_material(colors[color_idx])
 
     def initialize_reserve_cubes(self, colors: list[Colors] = DEFAULT_COLORS) -> None:
-        x_offsets = [0.30]  # , 0.55]
+        x_offsets = [0.55]  # , 0.55]
         y_offsets = [-0.1, 0.1]
         base_cube_center_height = self.cubes_size[2] * 0.5
         reserve_cube_rigid_props = sim_utils.RigidBodyPropertiesCfg(

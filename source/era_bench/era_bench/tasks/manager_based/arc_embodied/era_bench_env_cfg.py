@@ -42,7 +42,9 @@ class ActionsCfg:
         asset_name="robot",
         joint_names=["panda_joint.*"],
         body_name="panda_hand",
-        controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
+        controller=DifferentialIKControllerCfg(
+            command_type="pose", use_relative_mode=False, ik_method="dls", ik_params={"dls_lambda": 0.05}
+        ),
         body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=FRANKA_GRASP_CENTER_OFFSET),
     )
     gripper_action: mdp.BinaryJointPositionActionCfg = mdp.BinaryJointPositionActionCfg(

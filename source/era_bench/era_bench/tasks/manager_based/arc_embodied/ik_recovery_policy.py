@@ -3,14 +3,30 @@ from __future__ import annotations
 import math
 import os
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 import torch
 
-import isaaclab.utils.math as math_utils
-
 from .arc_state_machine import ArcStates
 from .ik_watchdog import ArcIKWatchdogUpdate
+
+
+class _CuroboPlannerLike(Protocol):
+    def plan_grasp_center_goal_with_fixed_yaw_candidates(self, grasp_center_goal: torch.Tensor) -> bool: ...
+
+
+def _normalize_watched_states(watched_states: ArcStates | Sequence[ArcStates]) -> tuple[ArcStates, ...]:
+    if isinstance(watched_states, ArcStates):
+        return (watched_states,)
+
+    normalized_states = tuple(watched_states)
+    if not normalized_states:
+        raise ValueError("Expected at least one watched state.")
+    if not all(isinstance(state, ArcStates) for state in normalized_states):
+        raise TypeError("Expected watched_states to contain only ArcStates values.")
+    return normalized_states
 
 
 @dataclass(frozen=True)
@@ -19,6 +35,8 @@ class ArcIKRecoveryUpdate:
 
     command: torch.Tensor
     active_mask: torch.Tensor
+    watchdog_reset_env_ids: torch.Tensor
+    execute_curobo_env_ids: torch.Tensor
     messages: tuple[str, ...]
 
 
@@ -31,18 +49,28 @@ class ArcIKRecoveryPolicy:
 
     _PHASE_IDLE = 0
     _PHASE_RETREAT = 1
-    _PHASE_RETRY = 2
+
+    @staticmethod
+    def _failure_mode_for_env(watchdog_update: ArcIKWatchdogUpdate, env_id: int) -> str:
+        if watchdog_update.watchdog_result.diverged[env_id].item():
+            return "divergence"
+        if watchdog_update.watchdog_result.stalled[env_id].item():
+            return "stall"
+        return "issue"
 
     def __init__(
         self,
         num_envs: int,
         device: torch.device | str,
         *,
-        watched_state: ArcStates = ArcStates.APPROACHING_PLACING_ABOVE,
+        watched_states: ArcStates | Sequence[ArcStates] = ArcStates.APPROACHING_PLACING_ABOVE,
         retreat_height: float = 0.12,
+        retreat_height_step: float = 0.03,
+        retreat_lateral_radius: float = 0.0,
+        retreat_lateral_radius_step: float = 0.03,
         retreat_position_tolerance: float = 0.015,
         max_retreat_steps: int = 12,
-        retry_yaw_offsets_deg: tuple[float, ...] = (0.0, 15.0, -15.0),
+        curobo_planner: _CuroboPlannerLike | None = None,
         log_path: str | None = None,
         session_label: str | None = None,
     ) -> None:
@@ -50,20 +78,31 @@ class ArcIKRecoveryPolicy:
             raise ValueError(f"Expected num_envs > 0, got {num_envs}.")
         if retreat_height <= 0.0:
             raise ValueError(f"Expected retreat_height > 0, got {retreat_height}.")
+        if retreat_height_step < 0.0:
+            raise ValueError(f"Expected retreat_height_step >= 0, got {retreat_height_step}.")
+        if retreat_lateral_radius < 0.0:
+            raise ValueError(f"Expected retreat_lateral_radius >= 0, got {retreat_lateral_radius}.")
+        if retreat_lateral_radius_step < 0.0:
+            raise ValueError(f"Expected retreat_lateral_radius_step >= 0, got {retreat_lateral_radius_step}.")
         if retreat_position_tolerance <= 0.0:
             raise ValueError(f"Expected retreat_position_tolerance > 0, got {retreat_position_tolerance}.")
         if max_retreat_steps <= 0:
             raise ValueError(f"Expected max_retreat_steps > 0, got {max_retreat_steps}.")
-        if not retry_yaw_offsets_deg:
-            raise ValueError("Expected at least one retry yaw offset.")
-
         self.num_envs = num_envs
         self.device = torch.device(device)
-        self.watched_state = watched_state
+        self.watched_states = _normalize_watched_states(watched_states)
+        self._watched_state_values = torch.tensor(
+            [state.python_value for state in self.watched_states],
+            dtype=torch.int64,
+            device=self.device,
+        )
         self.retreat_height = retreat_height
+        self.retreat_height_step = retreat_height_step
+        self.retreat_lateral_radius = retreat_lateral_radius
+        self.retreat_lateral_radius_step = retreat_lateral_radius_step
         self.retreat_position_tolerance = retreat_position_tolerance
         self.max_retreat_steps = max_retreat_steps
-        self.retry_yaw_offsets_deg = retry_yaw_offsets_deg
+        self._curobo_planner = curobo_planner
         self.log_path = log_path or self._default_log_path()
         self.session_label = session_label or "arc-ik-recovery"
 
@@ -115,9 +154,15 @@ class ArcIKRecoveryPolicy:
             raise ValueError(f"Expected target_command shape ({self.num_envs}, 8+) got {tuple(target_command.shape)}.")
 
         command = target_command.clone()
-        messages: list[str] = []
+        messages: list[str] = list(watchdog_update.warning_messages)
+        watchdog_reset_env_ids: list[int] = []
+        execute_curobo_env_ids: list[int] = []
+        started_retreat_env_ids: list[int] = []
 
-        active_state_mask = arc_state == self.watched_state.python_value
+        active_state_mask = torch.isin(
+            arc_state,
+            self._watched_state_values.to(device=arc_state.device, dtype=arc_state.dtype),
+        )
         inactive_env_ids = torch.nonzero(~active_state_mask, as_tuple=False).flatten()
         if inactive_env_ids.numel() > 0:
             self.reset(inactive_env_ids)
@@ -129,26 +174,15 @@ class ArcIKRecoveryPolicy:
         for env_id in (
             torch.nonzero(trigger_mask & active_state_mask & ~self._exhausted, as_tuple=False).flatten().tolist()
         ):
+            failure_mode = self._failure_mode_for_env(watchdog_update, env_id)
             if self._phase[env_id].item() == self._PHASE_IDLE:
                 self._attempt_idx[env_id] = 0
                 self._start_retreat(env_id, tcp_position, tcp_orientation, target_command)
-                messages.append(f"[WARNING]: Arc IK recovery started env={env_id} strategy=retreat-retry attempt=0")
-            elif self._phase[env_id].item() == self._PHASE_RETRY:
-                next_attempt = int(self._attempt_idx[env_id].item()) + 1
-                if next_attempt < len(self.retry_yaw_offsets_deg):
-                    self._attempt_idx[env_id] = next_attempt
-                    self._start_retreat(env_id, tcp_position, tcp_orientation, target_command)
-                    messages.append(
-                        "[WARNING]: Arc IK recovery escalating "
-                        f"env={env_id} strategy=retreat-retry attempt={next_attempt} "
-                        f"yaw_offset_deg={self.retry_yaw_offsets_deg[next_attempt]:.1f}"
-                    )
-                else:
-                    self._phase[env_id] = self._PHASE_IDLE
-                    self._exhausted[env_id] = True
-                    messages.append(
-                        f"[WARNING]: Arc IK recovery exhausted env={env_id} attempts={len(self.retry_yaw_offsets_deg)}"
-                    )
+                started_retreat_env_ids.append(env_id)
+                messages.append(
+                    "[WARNING]: Arc IK recovery started "
+                    f"env={env_id} strategy=retreat-curobo trigger={failure_mode} attempt=0"
+                )
 
         retreat_env_ids = torch.nonzero(self._phase == self._PHASE_RETREAT, as_tuple=False).flatten()
         if retreat_env_ids.numel() > 0:
@@ -156,22 +190,39 @@ class ArcIKRecoveryPolicy:
             self._retreat_steps[retreat_env_ids] += 1
             retreat_reached = self._retreat_reached(retreat_env_ids, tcp_position)
             retreat_timed_out = self._retreat_steps[retreat_env_ids] >= self.max_retreat_steps
-            retry_env_ids = retreat_env_ids[retreat_reached | retreat_timed_out]
-            for env_id in retry_env_ids.tolist():
-                self._start_retry(env_id, target_command)
-                messages.append(
-                    "[INFO]: Arc IK recovery switching to retry "
-                    f"env={env_id} attempt={int(self._attempt_idx[env_id].item())} "
-                    f"yaw_offset_deg={self.retry_yaw_offsets_deg[int(self._attempt_idx[env_id].item())]:.1f}"
-                )
-
-        retry_env_ids = torch.nonzero(self._phase == self._PHASE_RETRY, as_tuple=False).flatten()
-        if retry_env_ids.numel() > 0:
-            command[retry_env_ids] = self._retry_command[retry_env_ids]
+            planner_env_mask = retreat_reached | retreat_timed_out
+            if started_retreat_env_ids:
+                started_retreat_mask = torch.zeros_like(planner_env_mask)
+                for started_env_id in started_retreat_env_ids:
+                    started_matches = retreat_env_ids == started_env_id
+                    started_retreat_mask |= started_matches
+                planner_env_mask &= ~started_retreat_mask
+            planner_env_ids = retreat_env_ids[planner_env_mask]
+            for env_id in planner_env_ids.tolist():
+                watchdog_reset_env_ids.append(env_id)
+                self._phase[env_id] = self._PHASE_IDLE
+                self._retry_command[env_id] = target_command[env_id]
+                if self._attempt_curobo_plan(env_id, target_command[env_id, :7]):
+                    execute_curobo_env_ids.append(env_id)
+                    messages.append(
+                        "[INFO]: Arc IK recovery escalating to curobo "
+                        f"env={env_id} attempt={int(self._attempt_idx[env_id].item())} result=planned"
+                    )
+                else:
+                    self._exhausted[env_id] = True
+                    messages.append(
+                        "[WARNING]: Arc IK recovery exhausted " f"env={env_id} attempts=1 planner=curobo result=failed"
+                    )
 
         active_recovery_mask = self._phase != self._PHASE_IDLE
         self._log_messages(messages, arc_state=arc_state, step=step, elapsed_s=elapsed_s)
-        return ArcIKRecoveryUpdate(command=command, active_mask=active_recovery_mask, messages=tuple(messages))
+        return ArcIKRecoveryUpdate(
+            command=command,
+            active_mask=active_recovery_mask,
+            watchdog_reset_env_ids=torch.tensor(watchdog_reset_env_ids, device=self.device, dtype=torch.long),
+            execute_curobo_env_ids=torch.tensor(execute_curobo_env_ids, device=self.device, dtype=torch.long),
+            messages=tuple(messages),
+        )
 
     def _default_log_path(self) -> str:
         return os.path.abspath(
@@ -205,24 +256,42 @@ class ArcIKRecoveryPolicy:
         self._phase[env_id] = self._PHASE_RETREAT
         self._retreat_steps[env_id] = 0
         self._retreat_command[env_id] = 0.0
-        self._retreat_command[env_id, :3] = tcp_position[env_id]
-        self._retreat_command[env_id, 2] = tcp_position[env_id, 2] + self.retreat_height
+        attempt_idx = int(self._attempt_idx[env_id].item())
+        retreat_height = self.retreat_height + self.retreat_height_step * float(attempt_idx)
+        retreat_lateral_radius = self.retreat_lateral_radius + self.retreat_lateral_radius_step * float(attempt_idx)
+        retreat_offset = self._retreat_offset_for_attempt(
+            attempt_idx=attempt_idx,
+            retreat_height=retreat_height,
+            retreat_lateral_radius=retreat_lateral_radius,
+            dtype=target_command.dtype,
+        )
+        self._retreat_command[env_id, :3] = tcp_position[env_id] + retreat_offset
         self._retreat_command[env_id, 3:7] = tcp_orientation[env_id]
         self._retreat_command[env_id, 7] = target_command[env_id, 7]
 
-    def _start_retry(self, env_id: int, target_command: torch.Tensor) -> None:
-        self._phase[env_id] = self._PHASE_RETRY
-        self._retry_command[env_id] = target_command[env_id]
-        yaw_offset_deg = self.retry_yaw_offsets_deg[int(self._attempt_idx[env_id].item())]
-        if abs(yaw_offset_deg) < 1e-9:
-            return
+    def _retreat_offset_for_attempt(
+        self,
+        *,
+        attempt_idx: int,
+        retreat_height: float,
+        retreat_lateral_radius: float,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if retreat_lateral_radius <= 0.0:
+            return torch.tensor([0.0, 0.0, retreat_height], device=self.device, dtype=dtype)
 
-        yaw_tensor = torch.tensor([math.radians(yaw_offset_deg)], device=self.device, dtype=target_command.dtype)
-        zeros = torch.zeros_like(yaw_tensor)
-        yaw_quat = math_utils.quat_from_euler_xyz(zeros, zeros, yaw_tensor)
-        base_quat = target_command[env_id, 3:7].unsqueeze(0)
-        rotated_quat = math_utils.quat_mul(yaw_quat, base_quat)
-        self._retry_command[env_id, 3:7] = rotated_quat[0]
+        golden_angle = math.pi * (3.0 - math.sqrt(5.0))
+        azimuth = golden_angle * float(attempt_idx)
+        lateral_x = retreat_lateral_radius * math.cos(azimuth)
+        lateral_y = retreat_lateral_radius * math.sin(azimuth)
+        return torch.tensor([lateral_x, lateral_y, retreat_height], device=self.device, dtype=dtype)
+
+    def _attempt_curobo_plan(self, env_id: int, goal_command: torch.Tensor) -> bool:
+        if self._curobo_planner is None:
+            return False
+        if env_id != 0:
+            return False
+        return bool(self._curobo_planner.plan_grasp_center_goal_with_fixed_yaw_candidates(goal_command))
 
     def _retreat_reached(self, env_ids: torch.Tensor, tcp_position: torch.Tensor) -> torch.Tensor:
         retreat_error = torch.linalg.vector_norm(

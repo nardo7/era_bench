@@ -119,9 +119,7 @@ def are_objects_in_success_positions(
 
         within_thresh = closest_distances <= distance_threshold
         selected_within_thresh = torch.where(target_valid_mask, within_thresh, torch.ones_like(within_thresh))
-        print(
-            f"[DEBUG]: Color {color}: selected_within_thresh = {selected_within_thresh}, num_targets = {num_targets}, num_reserve = {num_reserve}"
-        )
+
         color_success = torch.all(selected_within_thresh, dim=1)
 
         has_enough_pairs = num_reserve >= num_targets

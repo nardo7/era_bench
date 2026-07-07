@@ -11,6 +11,7 @@ from isaaclab.managers import DatasetExportMode
 from isaaclab_mimic.motion_planners.curobo.curobo_planner import CuroboPlanner, CuroboPlannerCfg
 from era_bench.curobo_planner_extended import ExtendedCuroboPlanner
 from isaaclab.assets.articulation import Articulation
+from era_bench.tasks.manager_based.arc_embodied.scene_cfg import FRANKA_GRASP_CENTER_OFFSET
 
 
 def configure_env(args_cli: Namespace) -> ManagerBasedRLEnvCfg:
@@ -64,7 +65,8 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
     planner_cfg.approach_distance = 0.0
     planner_cfg.time_dilation_factor = 1.0
     planner_cfg.interpolation_dt = 0.06
-    planner_cfg.trajopt_tsteps = 20
+    planner_cfg.trajopt_tsteps = 40
+    planner_cfg.n_repeat = 10
 
     # planner_cfg.debug_planner = False
 
@@ -73,6 +75,7 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
         robot=robot,
         config=planner_cfg,
         env_id=env_id,
+        grasp_center_offset=FRANKA_GRASP_CENTER_OFFSET,
     )
 
     return planner

@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as torch_f
 from curobo.types.math import Pose
 from curobo.types.state import JointState
+import isaaclab.utils.math as math_utils
 from isaaclab_mimic.motion_planners.curobo.curobo_planner import CuroboPlanner
 
 
@@ -15,6 +16,104 @@ class ExtendedCuroboPlanner(CuroboPlanner):
     Attempts to use cuRobo's native plan_goalset / plan_batch_goalset APIs when
     available. Falls back to sequential per-goal planning for safety.
     """
+
+    def __init__(self, *args, grasp_center_offset: tuple[float, float, float] = (0.0, 0.0, 0.0), **kwargs):
+        super().__init__(*args, **kwargs)
+        self._grasp_center_offset = grasp_center_offset
+        self._expected_attached_object: str | None = None
+
+    def set_expected_attached_object(self, object_name: str | None) -> None:
+        self._expected_attached_object = object_name
+
+    def grasp_center_pose_to_panda_hand_pose(self, target_pose: torch.Tensor) -> torch.Tensor:
+        """Convert a grasp-center goal pose into the corresponding panda_hand goal pose."""
+        target_pos = target_pose[..., :3]
+        target_quat = target_pose[..., 3:7]
+        offset_pos = torch.tensor(self._grasp_center_offset, device=target_pose.device, dtype=target_pose.dtype)
+        offset_pos = offset_pos.expand_as(target_pos)
+        offset_quat = torch.zeros_like(target_quat)
+        offset_quat[..., 0] = 1.0
+
+        offset_inv_pos, offset_inv_quat = math_utils.subtract_frame_transforms(
+            offset_pos,
+            offset_quat,
+        )
+        hand_pos, hand_quat = math_utils.combine_frame_transforms(
+            target_pos,
+            target_quat,
+            offset_inv_pos,
+            offset_inv_quat,
+        )
+        return torch.cat((hand_pos, hand_quat), dim=-1)
+
+    def attach_object(self, object_name: str, gripper_pose: torch.Tensor, env_id: int = 0) -> None:
+        """Attach an object to the robot's end-effector for planning.
+
+        Args:
+            object_name: Name of the object to attach.
+            gripper_pose: Pose of the gripper in world frame.
+        """
+        self.set_expected_attached_object(object_name)
+        self.update_world()
+        self._sync_expected_attachment(env_id)
+
+    def detach_objects(self) -> None:
+        self.set_expected_attached_object(None)
+        self._detach_objects()
+
+    def panda_hand_pose_to_grasp_center_pose(self, target_pose: torch.Tensor) -> torch.Tensor:
+        """Convert a panda_hand pose into the corresponding grasp-center pose."""
+        target_pos = target_pose[..., :3, 3]
+        target_rot = target_pose[..., :3, :3]
+        target_quat = math_utils.quat_from_matrix(target_rot)
+        offset_pos = torch.tensor(self._grasp_center_offset, device=target_pose.device, dtype=target_pose.dtype)
+        offset_pos = offset_pos.expand_as(target_pos)
+        offset_quat = torch.zeros_like(target_quat)
+        offset_quat[..., 0] = 1.0
+        grasp_pos, grasp_quat = math_utils.combine_frame_transforms(
+            target_pos,
+            target_quat,
+            offset_pos,
+            offset_quat,
+        )
+        grasp_rot = math_utils.matrix_from_quat(grasp_quat)
+        return math_utils.make_pose(grasp_pos, grasp_rot)
+
+    def plan_grasp_center_goal_with_fixed_yaw_candidates(
+        self,
+        grasp_center_goal: torch.Tensor,
+        num_candidates: int = 8,
+        contact_window_fraction: float | None = 0.15,
+    ) -> bool:
+        """Plan to a grasp-center goal by converting it to the panda_hand frame expected by cuRobo."""
+        planner_pose = self.grasp_center_pose_to_panda_hand_pose(grasp_center_goal.unsqueeze(0))[0]
+        planner_base_quat = planner_pose[3:7]
+        return self.plan_with_fixed_yaw_candidates(
+            planner_pose[:3],
+            planner_base_quat,
+            num_candidates=num_candidates,
+            contact_window_fraction=contact_window_fraction,
+        )
+
+    def plan_with_fixed_yaw_candidates(
+        self,
+        target_position: torch.Tensor,
+        base_quat: torch.Tensor,
+        num_candidates: int = 8,
+        contact_window_fraction: float | None = 0.15,
+    ) -> bool:
+        """Try a fixed set of wrist-yaw variants and keep the first feasible plan."""
+        candidate_poses = self._generate_yaw_candidates(
+            target_position=target_position,
+            base_quat=base_quat,
+            num_candidates=num_candidates,
+        )
+        candidate_poses = torch.stack(candidate_poses, dim=0)
+        return self.plan_goalset(
+            candidate_poses[:, :3],
+            candidate_poses[:, 3:7],
+            contact_window_fraction=contact_window_fraction,
+        )
 
     def plan_goalset(
         self,
@@ -42,58 +141,106 @@ class ExtendedCuroboPlanner(CuroboPlanner):
         Returns:
             True if a trajectory was found, False otherwise.
         """
+        positions = list(positions)
+        quaternions = list(quaternions)
         poses = [self._make_pose(position=pos, quaternion=quat) for pos, quat in zip(positions, quaternions)]
         if not poses:
             self.logger.warning("plan_goalset: empty goal set")
             return False
 
+        goal_positions = torch.stack(positions, dim=0).unsqueeze(0)
+        goal_quaternions = torch.stack(quaternions, dim=0).unsqueeze(0)
+        goal_pose = Pose(position=goal_positions, quaternion=goal_quaternions)
+
         self.reset_plan()
         self.update_world()
+        self._sync_expected_attachment(env_id=0)
         start_state = self._get_current_joint_state_for_curobo()
 
-        # Try native cuRobo goalset API
-        mg = self.motion_gen
-        for api_name in ("plan_goalset", "plan_batch_goalset"):
-            fn = getattr(mg, api_name, None)
-            if fn is None:
-                continue
-            try:
-                result = fn(start_state, poses, self.plan_config)
-                if result is not None and self._result_succeeded(result):
-                    plan = self._extract_plan(result)
-                    if plan is not None:
-                        self._current_plan = self._finalise_plan(plan)
-                        self._plan_index = 0
-                        self.logger.info(f"plan_goalset native succeeded: {len(self._current_plan.position)} waypoints")
+        try:
+            # Try native cuRobo goalset API
+            mg = self.motion_gen
+            for api_name in ("plan_goalset", "plan_batch_goalset"):
+                fn = getattr(mg, api_name, None)
+                if fn is None:
+                    continue
+                try:
+                    result = fn(start_state, goal_pose, self.plan_config)
+                    if result is not None and self._result_succeeded(result):
+                        plan = self._extract_plan(result)
+                        if plan is not None:
+                            self._current_plan = self._finalise_plan(plan)
+                            self._plan_index = 0
+                            self.logger.info(
+                                f"plan_goalset native succeeded: {len(self._current_plan.position)} waypoints"
+                            )
+                            return True
+                except Exception as exc:
+                    self.logger.debug(f"{api_name} failed: {exc}")
+
+            # Fallback: sequential per-goal planning
+            self.logger.info("plan_goalset: native failed, falling back to sequential planning")
+            for pose in poses:
+                try:
+                    success = (
+                        self._plan_to_contact_with_window(
+                            start_state=start_state,
+                            goal_pose=pose,
+                            contact_window_fraction=contact_window_fraction,
+                        )
+                        if contact_window_fraction is not None
+                        else self._plan_to_contact(
+                            start_state=start_state,
+                            goal_pose=pose,
+                            retreat_distance=self.config.retreat_distance,
+                            approach_distance=self.config.approach_distance,
+                            contact=False,
+                        )
+                    )
+                    if success:
                         return True
-            except Exception as exc:
-                self.logger.debug(f"{api_name} failed: {exc}")
+                except Exception:
+                    continue
 
-        # Fallback: sequential per-goal planning
-        self.logger.info("plan_goalset: native failed, falling back to sequential planning")
-        for pose in poses:
-            try:
-                success = (
-                    self._plan_to_contact_with_window(
-                        start_state=start_state,
-                        goal_pose=pose,
-                        contact_window_fraction=contact_window_fraction,
-                    )
-                    if contact_window_fraction is not None
-                    else self._plan_to_contact(
-                        start_state=start_state,
-                        goal_pose=pose,
-                        retreat_distance=self.config.retreat_distance,
-                        approach_distance=self.config.approach_distance,
-                        contact=False,
-                    )
-                )
-                if success:
-                    return True
-            except Exception:
-                continue
+            return False
+        finally:
+            self._detach_objects()
 
-        return False
+    def _sync_expected_attachment(self, env_id: int) -> None:
+        expected_attached_object = self._expected_attached_object
+        gripper_closed = expected_attached_object is not None
+        self._set_gripper_state(gripper_closed)
+        current_attached = self.get_attached_objects()
+
+        if expected_attached_object and expected_attached_object not in current_attached:
+            object_mappings = self._get_object_mappings()
+            if expected_attached_object in object_mappings:
+                gripper_pos = self.robot.data.joint_pos[env_id, -2:]
+                is_grasped = self._check_object_grasped(gripper_pos, expected_attached_object)
+                if is_grasped:
+                    self._attach_object(expected_attached_object, object_mappings[expected_attached_object], env_id)
+
+        if expected_attached_object is None and current_attached:
+            self._detach_objects()
+
+    def _generate_yaw_candidates(
+        self,
+        target_position: torch.Tensor,
+        base_quat: torch.Tensor,
+        num_candidates: int,
+    ) -> list[torch.Tensor]:
+        """Generate fixed wrist-yaw variants for a target position."""
+        yaw_angles = torch.linspace(
+            0.0,
+            2.0 * torch.pi,
+            steps=num_candidates + 1,
+            device=target_position.device,
+            dtype=target_position.dtype,
+        )[:-1]
+        zeros = torch.zeros_like(yaw_angles)
+        yaw_quats = math_utils.quat_from_euler_xyz(zeros, zeros, yaw_angles)
+        candidate_quats = math_utils.quat_mul(yaw_quats, base_quat.unsqueeze(0).expand(num_candidates, -1))
+        return [torch.cat((target_position, quat), dim=0) for quat in candidate_quats]
 
     def _plan_to_contact_with_window(
         self,

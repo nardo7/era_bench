@@ -44,8 +44,8 @@ import isaaclab.utils.math as math_utils
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.assets import RigidObject
 from isaaclab_mimic.motion_planners.curobo.curobo_planner import CuroboPlanner
-from era_bench.tasks.manager_based.arc_embodied.arc_state_machine import ArcStates
 from era_bench.curobo_planner_extended import ExtendedCuroboPlanner
+from era_bench.tasks.manager_based.arc_embodied.arc_state_machine import ArcStates
 from era_bench.tasks.manager_based.arc_embodied import mdp
 from era_bench.tasks.manager_based.arc_embodied.arc_state_machine import ArcStateMachine
 from era_bench.tasks.manager_based.arc_embodied.ik_recovery_policy import ArcIKRecoveryPolicy
@@ -101,7 +101,7 @@ def target_eef_pose_to_action(
 
 
 def execute_plan(
-    env: ManagerBasedRLEnv, planner: CuroboPlanner, target_gripper_pose: torch.Tensor
+    env: ManagerBasedRLEnv, planner: ExtendedCuroboPlanner, target_gripper_pose: torch.Tensor
 ) -> tuple[VecEnvObs | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, dict | None, int]:
     planned_trayectory_poses = planner.get_planned_poses()
     obs: VecEnvObs | None = None
@@ -114,11 +114,13 @@ def execute_plan(
         print("[INFO]: No planned trajectory poses available. Skipping execution.")
         return obs, reward, terminated, truncated, info, 0
 
-    dest_pose = planned_trayectory_poses[-1]
+    grasp_center_poses = [planner.panda_hand_pose_to_grasp_center_pose(pose) for pose in planned_trayectory_poses]
+
+    dest_pose = grasp_center_poses[-1]
     last_action = target_eef_pose_to_action({"eef": dest_pose}, {"eef": target_gripper_pose.unsqueeze(-1)})
     print(f"[INFO]: Trayectory goal planned: {last_action[:3].tolist()} with quaternion {last_action[3:7].tolist()}")
     executed_steps = 0
-    for pose in planned_trayectory_poses:
+    for pose in grasp_center_poses:
         # from matrix pose to action
         action = target_eef_pose_to_action({"eef": pose}, {"eef": target_gripper_pose.unsqueeze(-1)})
         obs, reward, terminated, truncated, info = env.step(action)
@@ -144,32 +146,6 @@ def matrix_pose_from_pose(pose: torch.Tensor) -> torch.Tensor:
     z = pose[..., 2:3]
     quat = pose[..., 3:]
     return _pose_from_xy_quat(xy, z.item(), quat)
-
-
-def generate_yaw_candidates(
-    position: torch.Tensor, base_quat: torch.Tensor, num_candidates: int = 8
-) -> list[torch.Tensor]:
-    """Generate fixed wrist-yaw variants for a target position using a chosen base orientation."""
-    yaw_angles = torch.linspace(
-        0.0,
-        2.0 * torch.pi,
-        steps=num_candidates + 1,
-        device=position.device,
-        dtype=position.dtype,
-    )[:-1]
-    zeros = torch.zeros_like(yaw_angles)
-    yaw_quats = math_utils.quat_from_euler_xyz(zeros, zeros, yaw_angles)
-    candidate_quats = math_utils.quat_mul(yaw_quats, base_quat.unsqueeze(0).expand(num_candidates, -1))
-    return [torch.cat((position, quat), dim=0) for quat in candidate_quats]
-
-
-def plan_with_fixed_yaw_candidates(
-    planner: ExtendedCuroboPlanner, target_position: torch.Tensor, base_quat: torch.Tensor
-) -> bool:
-    """Try a small fixed set of wrist yaws and keep the first feasible plan."""
-    candidate_poses = generate_yaw_candidates(target_position, base_quat, num_candidates=8)
-    candidate_poses = torch.stack(candidate_poses, dim=0)
-    return planner.plan_goalset(candidate_poses[:, :3], candidate_poses[:, 3:7], contact_window_fraction=0.15)
 
 
 def main():
@@ -237,6 +213,7 @@ def main():
     place_above_recovery = ArcIKRecoveryPolicy(
         num_envs=env.num_envs,
         device=env.device,
+        curobo_planner=planner,
         session_label=args_cli.task,
     )
 
@@ -260,7 +237,18 @@ def main():
             print(f"[DEBUG]: ArcStateMachine: Current TCP position: {tcp_rest_position[0, :3].tolist()}")
 
             next_pose, arc_state = arc_sm.compute(torch.cat((tcp_rest_position, tcp_rest_orientation), dim=-1))
-
+            if arc_state[0] in [
+                ArcStates.APPROACHING_PLACING_ABOVE.python_value,
+                ArcStates.APPROACHING_PLACING.python_value,
+                ArcStates.PLACING.python_value,
+                ArcStates.RETREATING_PLACING_ABOVE.python_value,
+            ]:
+                color = arc_sm.get_current_goal_color(0)
+                reserve_cube_idx = arc_sm.get_current_stack_index(0)
+                cube_name = scene_cfg.get_reserve_cube_name(color, reserve_cube_idx)
+                planner.set_expected_attached_object(cube_name)
+            else:
+                planner.set_expected_attached_object(None)
             print(f"[DEBUG]: ArcStateMachine: Next desired pose: {next_pose[0, :3].tolist()}")
             plan_success = False
 
@@ -277,18 +265,18 @@ def main():
                 step=step,
                 elapsed_s=time.time() - start,
             )
+            if recovery_update.watchdog_reset_env_ids.numel() > 0:
+                place_above_watchdog.reset(recovery_update.watchdog_reset_env_ids)
             # this supports only one environment for now
+            if (
+                recovery_update.execute_curobo_env_ids.numel() > 0
+                and 0 in recovery_update.execute_curobo_env_ids.tolist()
+            ):
+                plan_success = True
             if arc_state[0] in [
                 ArcStates.RETREATING_PLACING_ABOVE.python_value
             ]:  # , ArcStates.APPROACHING.python_value]:
-                next_pose = next_pose[0]
-                retreat_base_quat = tcp_rest_orientation[0]
-                plan_success = plan_with_fixed_yaw_candidates(
-                    planner,
-                    next_pose[:3],
-                    retreat_base_quat,
-                )
-                next_pose = next_pose.unsqueeze(0)
+                plan_success = planner.plan_grasp_center_goal_with_fixed_yaw_candidates(next_pose[0, :7])
 
             if not plan_success:
                 print("[WARNING]: Skipping execution for this state-machine step with CUROBO. trying with plain IK.")
@@ -296,7 +284,9 @@ def main():
                 obs, reward, terminated, truncated, info = env.step(recovery_update.command)
                 state_steps = 1
             else:
-                obs, reward, terminated, truncated, info, state_steps = execute_plan(env, planner, next_pose[0, -1])
+                obs, reward, terminated, truncated, info, state_steps = execute_plan(
+                    env, planner, recovery_update.command[0, -1]
+                )
 
             if terminated is None or truncated is None:
                 dones = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)

@@ -103,9 +103,7 @@ def get_reserve_cube_stack(
 
 @wp.func
 def distance_below_threshold(current_pos: wp.vec3f, desired_pos: wp.vec3f, threshold: float, state: int) -> bool:
-    threshold = (
-        threshold if state == ARC_STATE_APPROACHING or state == ARC_STATE_APPROACHING_PLACING else threshold * 2.0
-    )  # double threshold for above states
+    threshold = threshold  # if state == ARC_STATE_APPROACHING or state == ARC_STATE_APPROACHING_PLACING else threshold * 2.0  # double threshold for above states
     return wp.length(current_pos - desired_pos) < threshold
 
 
@@ -113,13 +111,13 @@ def distance_below_threshold(current_pos: wp.vec3f, desired_pos: wp.vec3f, thres
 def get_state_config(state: int) -> tuple[float, int]:
     """Get wait time and next state for current state."""
     if state == ARC_STATE_REST:  # REST
-        return 0.1, ARC_STATE_APPROACHING_ABOVE
+        return 0.05, ARC_STATE_APPROACHING_ABOVE
     elif state == ARC_STATE_APPROACHING_ABOVE:  # APPROACHING_ABOVE
         return 0.2, ARC_STATE_APPROACHING
     elif state == ARC_STATE_APPROACHING:  # APPROACHING
         return 0.3, ARC_STATE_GRASPING
     elif state == ARC_STATE_GRASPING:  # GRASPING
-        return 0.2, ARC_STATE_RETREATING_ABOVE
+        return 0.4, ARC_STATE_RETREATING_ABOVE
     elif state == ARC_STATE_RETREATING_ABOVE:  # RETREATING_ABOVE
         return 0.1, ARC_STATE_APPROACHING_PLACING_ABOVE
     elif state == ARC_STATE_APPROACHING_PLACING_ABOVE:  # APPROACHING_PLACING_ABOVE
@@ -131,7 +129,7 @@ def get_state_config(state: int) -> tuple[float, int]:
     elif state == ARC_STATE_RETREATING_PLACING_ABOVE:  # RETREATING_PLACING_ABOVE
         return 0.1, ARC_STATE_REST
     else:  # RETREATING (state == ARC_STATE_RETREATING)
-        return 0.1, ARC_STATE_REST
+        return 0.05, ARC_STATE_REST
 
 
 @wp.kernel
@@ -147,6 +145,7 @@ def arc_state_machine_kernel(
     offset: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     retreat_offset: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     retreat_offset_reserve: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
+    retreat_from_position: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     current_goal_objects: wp.array(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     reserve_cube_poses_idx_wp: wp.array2d(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     position_threshold: float,
@@ -174,6 +173,8 @@ def arc_state_machine_kernel(
         or state == ARC_STATE_APPROACHING
         or state == ARC_STATE_APPROACHING_PLACING_ABOVE
         or state == ARC_STATE_APPROACHING_PLACING  # approach states require distance check
+        or state == ARC_STATE_RETREATING_ABOVE
+        or state == ARC_STATE_RETREATING_PLACING_ABOVE  # retreat states require distance check
         else condition
     )
 
@@ -187,6 +188,10 @@ def arc_state_machine_kernel(
     if state == ARC_STATE_PLACING and condition:
         current_goal_objects[tid] = (current_goal_object_idx + 1) % wp.len(desired_goal_poses[tid])
         reserve_cube_poses_idx_wp[tid, color_idx] = reserve_cube_idx - 1
+
+    # save position to retreat from after grasping/placing
+    if state == ARC_STATE_GRASPING or state == ARC_STATE_PLACING:
+        retreat_from_position[tid] = des_ee_pose[tid]
 
     if state == ARC_STATE_REST:
         des_gripper_state[tid] = GripperState.OPEN
@@ -218,7 +223,7 @@ def arc_state_machine_kernel(
 
     elif state == ARC_STATE_RETREATING_ABOVE:
         des_gripper_state[tid] = GripperState.CLOSE
-        des_ee_pose[tid] = wp.transform_multiply(retreat_offset_reserve[tid], ee_pose[tid])  # lift +0.2m
+        des_ee_pose[tid] = wp.transform_multiply(retreat_offset_reserve[tid], retreat_from_position[tid])  # lift +0.2m
 
     elif state == ARC_STATE_APPROACHING_PLACING_ABOVE:
         des_gripper_state[tid] = GripperState.CLOSE
@@ -235,7 +240,10 @@ def arc_state_machine_kernel(
 
     elif state == ARC_STATE_RETREATING_PLACING_ABOVE:
         des_gripper_state[tid] = GripperState.OPEN
-        des_ee_pose[tid] = wp.transform_multiply(retreat_offset[tid], ee_pose[tid])  # lift +0.2m after placing
+        des_ee_pose[tid] = wp.transform_multiply(
+            retreat_offset[tid], retreat_from_position[tid]
+        )  # lift +0.2m after placing
+
 
 class ArcStateMachine:
 
@@ -345,13 +353,14 @@ class ArcStateMachine:
         self.offset = torch.zeros((self.num_envs, 7), device=device)
         self.retreat_offset = torch.zeros((self.num_envs, 7), device=device)
         self.retreat_offset_reserve = torch.zeros((self.num_envs, 7), device=device)
+        self.retreat_from_position = torch.zeros((self.num_envs, 7), device=device)
 
         cube_stacks_max_height = cubes_per_stack * cube_sizes[-1]  # max height of stacked cubes
         print(f"[INFO]: Cube stacks max height: {cube_stacks_max_height}")
 
         self.offset[:, 2] = 0
         self.offset[:, -1] = 1.0  # warp expects quaternion as (x, y, z, w)
-        self.retreat_offset[:, 2] = 0.2  # retreat 0.2m above the current position
+        self.retreat_offset[:, 2] = 0.1  # retreat 0.1m above the current position
         self.retreat_offset[:, -1] = 1.0  # convert to (x, y, z, w) for warp kernel use
         self.retreat_offset_reserve[:, 2] = (
             cube_sizes[-1] * 0.5 + cube_stacks_max_height
@@ -372,6 +381,7 @@ class ArcStateMachine:
         self.reserve_cubes_poses_wp = wp.from_torch(reserve_cubes_stacked, wp.transform)
         self.reserve_cube_poses_idx_wp = wp.from_torch(self.reserve_cube_poses_idx, wp.int32)
         self.retreat_offset_reserve_wp = wp.from_torch(self.retreat_offset_reserve, wp.transform)
+        self.retreat_from_position_wp = wp.from_torch(self.retreat_from_position, wp.transform)
 
         if self.debug_shapes:
             self._log_shape("dest_poses_warp_order", self.dest_poses)
@@ -456,6 +466,7 @@ class ArcStateMachine:
                 self.offset_wp,
                 self.retreat_offset_wp,
                 self.retreat_offset_reserve_wp,
+                self.retreat_from_position_wp,
                 self.current_idx_objects_wp,
                 self.reserve_cube_poses_idx_wp,
                 self.position_threshold,
