@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, cast
 from era_bench.tasks.manager_based.common.geometry_utils import mirror_points_across_line
 from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
 from isaaclab.assets import RigidObject
+from isaaclab.sensors import FrameTransformer
 from ...common.utils import line_direction_xy_from_quat
 
 if TYPE_CHECKING:
@@ -57,9 +58,9 @@ def are_objects_in_success_positions(
     def _targets_to_padded_env_major(
         targets: list[torch.Tensor] | torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return padded planar targets [E, T_max, 2] and valid-counts [E]."""
+        """Return padded 3D targets [E, T_max, 3] and valid-counts [E]."""
         if isinstance(targets, torch.Tensor):
-            env_major = _as_env_major_positions(targets)[..., :2]
+            env_major = _as_env_major_positions(targets)[..., :3]
             counts = torch.full((env.num_envs,), env_major.shape[1], device=env.device, dtype=torch.long)
             return env_major, counts
 
@@ -78,17 +79,21 @@ def are_objects_in_success_positions(
 
         counts = torch.tensor(counts_list, device=env.device, dtype=torch.long)
         max_targets = int(counts.max().item()) if counts.numel() > 0 else 0
-        padded = torch.zeros((env.num_envs, max_targets, 2), device=env.device)
+        padded = torch.zeros((env.num_envs, max_targets, 3), device=env.device)
         for env_id, t in enumerate(targets):
             t_dev = t.to(device=env.device)
             if t_dev.ndim == 1:
                 t_dev = t_dev.unsqueeze(0)
             if t_dev.shape[0] > 0:
-                padded[env_id, : t_dev.shape[0]] = t_dev[..., :2]
+                padded[env_id, : t_dev.shape[0]] = t_dev[..., :3]
         return padded, counts
 
     reserve_cubes_by_color = env.get_reserve_cubes_positions_by_color()
     success_mask = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+
+    # check that cubes where placed by checking gripper position is at least 0.05m away
+    ee_frame_sensor: FrameTransformer = env.scene["ee_frame"]
+    tcp_rest_position = ee_frame_sensor.data.target_pos_w[..., 0, :].clone() - env.scene.env_origins
 
     for color, target_entries in success_positions.items():
         if len(target_entries) == 0:
@@ -103,13 +108,13 @@ def are_objects_in_success_positions(
             success_mask &= num_targets == 0
             continue
 
-        reserve_positions = _as_env_major_positions(reserve_positions_raw)[..., :2]
+        reserve_positions = _as_env_major_positions(reserve_positions_raw)[..., :3]
         num_reserve = reserve_positions.shape[1]
         if num_reserve == 0:
             success_mask &= num_targets == 0
             continue
 
-        # Pairwise planar distances per env: [E, num_targets_max, num_reserve]
+        # Pairwise 3D distances per env: [E, num_targets_max, num_reserve]
         distances = torch.cdist(target_positions, reserve_positions, p=2)
         target_valid_mask = torch.arange(target_positions.shape[1], device=env.device).unsqueeze(
             0
@@ -125,6 +130,12 @@ def are_objects_in_success_positions(
         has_enough_pairs = num_reserve >= num_targets
         color_success &= has_enough_pairs
         success_mask &= color_success
+
+        # compute the 3D distance from the TCP to the target positions for this color
+        tcp_to_targets = torch.cdist(tcp_rest_position.unsqueeze(1), target_positions, p=2)
+        tcp_to_targets_min = torch.min(tcp_to_targets, dim=2).values.squeeze(1)
+        is_tcp_far_enough = tcp_to_targets_min > 0.05
+        success_mask &= is_tcp_far_enough
 
     return success_mask
 

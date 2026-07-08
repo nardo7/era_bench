@@ -49,7 +49,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=18.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 5.0)
         ),
-        offset=CameraCfg.OffsetCfg(pos=(1.8, 0.0, 1.0), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"),
+        offset=CameraCfg.OffsetCfg(pos=(1.8, 0.0, 0.7), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"),
         # offset=CameraCfg.OffsetCfg(pos=(1.8, 0.0, 1.7), rot=(0.24184, -0.66446, -0.66446, 0.24184), convention="ros"),
     )
 
@@ -139,12 +139,12 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     @property
     def reserve_cubes_amount_per_color(self) -> int:
         """Number of reserve cubes used per color in this scene config."""
-        return 3
+        return 9
 
     @property
     def reserve_cubes_amount_per_line(self) -> int:
         """Number of reserve cubes used per line in this scene config."""
-        return 1
+        return 3
 
     def _cube_visual_material(self, color: Colors) -> sim_utils.PreviewSurfaceCfg:
         return sim_utils.PreviewSurfaceCfg(diffuse_color=COLOR_RGB[color])
@@ -163,9 +163,9 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
             cube_cfg.spawn.visual_material = self._cube_visual_material(colors[color_idx])
 
     def initialize_reserve_cubes(self, colors: list[Colors] = DEFAULT_COLORS) -> None:
-        x_offsets = [0.55]  # , 0.55]
-        y_offsets = [-0.1, 0.1]
-        base_cube_center_height = self.cubes_size[2] * 0.5
+        # x_offsets = [0.60]  # , 0.55]
+        # y_offsets = [-0.1, 0.1]
+        # base_cube_center_height = self.cubes_size[2] * 0.5
         reserve_cube_rigid_props = sim_utils.RigidBodyPropertiesCfg(
             solver_position_iteration_count=16,
             solver_velocity_iteration_count=4,
@@ -184,26 +184,26 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         # init reserve cubes
         for color_idx in range(self.colors_amount):
             for i in range(self.reserve_cubes_amount_per_color):
-                offset_x = x_offsets[int(color_idx / 2)]
-                offset_y = y_offsets[color_idx % 2]
-                x = offset_x + (i % self.reserve_cubes_amount_per_line) * (
-                    self.cubes_size[0] + self.separation_distance
-                )
-                y = offset_y
+                # offset_x = x_offsets[int(color_idx / 2)]
+                # offset_y = y_offsets[color_idx % 2]
+                # x = offset_x + (i % self.reserve_cubes_amount_per_line) * (
+                #     self.cubes_size[0] + self.separation_distance
+                # )
+                # y = offset_y
                 cube_name = f"reserve_cube_{colors[color_idx].value}_{i+1}"
                 setattr(
                     self,
                     cube_name,
                     RigidObjectCfg(
                         prim_path="{ENV_REGEX_NS}/" + cube_name,
-                        init_state=RigidObjectCfg.InitialStateCfg(
-                            pos=(
-                                x,
-                                y,
-                                base_cube_center_height
-                                + ((i // self.reserve_cubes_amount_per_line) * self.cubes_size[2]),
-                            )
-                        ),
+                        # init_state=RigidObjectCfg.InitialStateCfg(
+                        #     pos=(
+                        #         x,
+                        #         y,
+                        #         base_cube_center_height
+                        #         + ((i // self.reserve_cubes_amount_per_line) * self.cubes_size[2]),
+                        #     )
+                        # ),
                         spawn=sim_utils.CuboidCfg(
                             size=self.cubes_size,
                             semantic_tags=[("class", cube_name)],

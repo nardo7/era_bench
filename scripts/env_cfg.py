@@ -65,7 +65,7 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
     planner_cfg.approach_distance = 0.0
     planner_cfg.time_dilation_factor = 1.0
     planner_cfg.interpolation_dt = 0.06
-    planner_cfg.trajopt_tsteps = 40
+    planner_cfg.trajopt_tsteps = 35
     planner_cfg.n_repeat = 10
 
     # planner_cfg.debug_planner = False
@@ -76,6 +76,7 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
         config=planner_cfg,
         env_id=env_id,
         grasp_center_offset=FRANKA_GRASP_CENTER_OFFSET,
+        use_native_goalset=False,
     )
 
     return planner

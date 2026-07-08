@@ -53,6 +53,7 @@ from era_bench.tasks.manager_based.arc_embodied.ik_watchdog import ArcIKWatchdog
 from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
 from era_bench.tasks.manager_based.arc_embodied.era_bench_env import EraBenchEnv
 from era_bench.tasks.manager_based.common.geometry_utils import rigid_object_world_size_meters
+from era_bench.tasks.manager_based.arc_embodied.config import Colors
 import era_bench.tasks  # noqa: F401
 import random
 
@@ -101,16 +102,18 @@ def target_eef_pose_to_action(
 
 
 def execute_plan(
-    env: ManagerBasedRLEnv, planner: ExtendedCuroboPlanner, target_gripper_pose: torch.Tensor
+    env: EraBenchEnv, planner: ExtendedCuroboPlanner, target_gripper_pose: torch.Tensor
 ) -> tuple[VecEnvObs | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, dict | None, int]:
+    gripper_raw_action = target_gripper_pose
     planned_trayectory_poses = planner.get_planned_poses()
+    current_plan = planner.current_plan
     obs: VecEnvObs | None = None
     reward: torch.Tensor | None = None
     terminated: torch.Tensor | None = None
     truncated: torch.Tensor | None = None
     info: dict | None = None
 
-    if not planned_trayectory_poses:
+    if current_plan is None or current_plan.position is None or len(current_plan.position) == 0:
         print("[INFO]: No planned trajectory poses available. Skipping execution.")
         return obs, reward, terminated, truncated, info, 0
 
@@ -120,12 +123,23 @@ def execute_plan(
     last_action = target_eef_pose_to_action({"eef": dest_pose}, {"eef": target_gripper_pose.unsqueeze(-1)})
     print(f"[INFO]: Trayectory goal planned: {last_action[:3].tolist()} with quaternion {last_action[3:7].tolist()}")
     executed_steps = 0
-    for pose in grasp_center_poses:
-        # from matrix pose to action
-        action = target_eef_pose_to_action({"eef": pose}, {"eef": target_gripper_pose.unsqueeze(-1)})
-        obs, reward, terminated, truncated, info = env.step(action)
+    plan_joint_positions = cast(torch.Tensor, current_plan.position)
+    repeat_count = planner.n_repeat if planner.n_repeat is not None else 0
+    if repeat_count > 0:
+        final_joint_position = plan_joint_positions[-1:].clone()
+        repeated_joint_positions = final_joint_position.repeat(repeat_count, 1)
+        plan_joint_positions = torch.cat([plan_joint_positions, repeated_joint_positions], dim=0)
+    if current_plan.joint_names is None:
+        raise ValueError("Expected current CuRobo plan to include joint names.")
+    plan_joint_names = list(current_plan.joint_names)
+    for joint_waypoint in plan_joint_positions:
+        obs, reward, terminated, truncated, info = env.step_joint_targets(
+            joint_waypoint.unsqueeze(0),
+            joint_names=plan_joint_names,
+            gripper_raw_action=gripper_raw_action,
+        )
         executed_steps += 1
-        if terminated | truncated:
+        if terminated is not None and truncated is not None and (terminated | truncated).any():
             return obs, reward, terminated, truncated, info, executed_steps
     print("[INFO]: Completed execution of planned trajectory in {} steps.".format(executed_steps))
     return obs, reward, terminated, truncated, info, executed_steps
@@ -177,12 +191,10 @@ def main():
     scene_cfg = cast(EraBenchSceneCfg, env.scene.cfg)
 
     # desired object orientation (we only do position control of object)
-    desired_orientation = torch.zeros((env.num_envs, 3, 4), device=env.device)
+    desired_poses_amount = env.success_positions[list(env.success_positions.keys())[0]][0].shape[0]
+    desired_orientation = torch.zeros((env.num_envs, desired_poses_amount, 4), device=env.device)
     desired_orientation[:, :, 1] = 1.0
-    reserve_cube_stacks = scene_cfg.get_reserve_cube_stacks()
-    reserve_cube_stacks = {
-        color: stack.to(env.device).expand(env.num_envs, -1, -1) for color, stack in reserve_cube_stacks.items()
-    }
+    reserve_cube_stacks = env.get_reserve_cubes_poses_by_color()
     dest_poses_by_color = {
         color: (
             torch.cat([torch.stack(poses, dim=0)[:, :, :3], desired_orientation], dim=-1)
@@ -209,12 +221,14 @@ def main():
         min_improvement=1e-3,
         divergence_ratio=1.25,
         warmup_steps=3,
+        watched_states=[ArcStates.APPROACHING_PLACING_ABOVE],
     )
     place_above_recovery = ArcIKRecoveryPolicy(
         num_envs=env.num_envs,
         device=env.device,
         curobo_planner=planner,
         session_label=args_cli.task,
+        watched_states=[ArcStates.APPROACHING_PLACING_ABOVE],
     )
 
     # simulate environment
@@ -222,6 +236,7 @@ def main():
     state_steps = 0
     start = time.time()
     print(f"[INFO]: Arc IK recovery log file: {place_above_recovery.log_path}")
+    recovery_active_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
@@ -241,7 +256,6 @@ def main():
                 ArcStates.APPROACHING_PLACING_ABOVE.python_value,
                 ArcStates.APPROACHING_PLACING.python_value,
                 ArcStates.PLACING.python_value,
-                ArcStates.RETREATING_PLACING_ABOVE.python_value,
             ]:
                 color = arc_sm.get_current_goal_color(0)
                 reserve_cube_idx = arc_sm.get_current_stack_index(0)
@@ -253,7 +267,13 @@ def main():
             plan_success = False
 
             print(f"[DEBUG]: ArcStateMachine: Current state: {ArcStates(arc_state[0].item())}")
-            watchdog_update = place_above_watchdog.update(arc_state, tcp_rest_position[:, :3], next_pose)
+            if recovery_active_mask.any():
+                place_above_watchdog.reset(torch.nonzero(recovery_active_mask, as_tuple=False).flatten())
+            watchdog_update = place_above_watchdog.update(
+                arc_state,
+                tcp_rest_position[:, :3],
+                next_pose,
+            )
             for warning_message in watchdog_update.warning_messages:
                 print(warning_message)
             recovery_update = place_above_recovery.update(
@@ -265,8 +285,7 @@ def main():
                 step=step,
                 elapsed_s=time.time() - start,
             )
-            if recovery_update.watchdog_reset_env_ids.numel() > 0:
-                place_above_watchdog.reset(recovery_update.watchdog_reset_env_ids)
+            recovery_active_mask = recovery_update.active_mask.clone()
             # this supports only one environment for now
             if (
                 recovery_update.execute_curobo_env_ids.numel() > 0
@@ -274,9 +293,13 @@ def main():
             ):
                 plan_success = True
             if arc_state[0] in [
-                ArcStates.RETREATING_PLACING_ABOVE.python_value
+                ArcStates.APPROACHING_ABOVE.python_value,
+                ArcStates.APPROACHING_PLACING_ABOVE.python_value,
+                ArcStates.APPROACHING.python_value,
             ]:  # , ArcStates.APPROACHING.python_value]:
-                plan_success = planner.plan_grasp_center_goal_with_fixed_yaw_candidates(next_pose[0, :7])
+                plan_success = planner.plan_grasp_center_goal_with_fixed_yaw_candidates(
+                    next_pose[0, :7], contact_window_fraction=0.1
+                )
 
             if not plan_success:
                 print("[WARNING]: Skipping execution for this state-machine step with CUROBO. trying with plain IK.")
@@ -295,11 +318,14 @@ def main():
 
             arc_sm.advance(state_steps)
 
+        recovery_active_mask = recovery_active_mask.clone()
+
         if dones.any():
             print(f"[INFO]: Resetting environments {torch.where(dones)[0].tolist()} after episode completion.")
             done_env_ids = torch.where(dones)[0]
             place_above_watchdog.reset(done_env_ids)
             place_above_recovery.reset(done_env_ids)
+            recovery_active_mask[done_env_ids] = False
             arc_sm.reset_idx(torch.where(dones)[0].tolist())
             env.scene.reset(torch.where(dones)[0].tolist())
 

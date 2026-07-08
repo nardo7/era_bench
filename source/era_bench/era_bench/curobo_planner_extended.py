@@ -17,10 +17,17 @@ class ExtendedCuroboPlanner(CuroboPlanner):
     available. Falls back to sequential per-goal planning for safety.
     """
 
-    def __init__(self, *args, grasp_center_offset: tuple[float, float, float] = (0.0, 0.0, 0.0), **kwargs):
+    def __init__(
+        self,
+        *args,
+        grasp_center_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        use_native_goalset: bool = False,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self._grasp_center_offset = grasp_center_offset
         self._expected_attached_object: str | None = None
+        self._use_native_goalset = use_native_goalset
 
     def set_expected_attached_object(self, object_name: str | None) -> None:
         self._expected_attached_object = object_name
@@ -123,9 +130,10 @@ class ExtendedCuroboPlanner(CuroboPlanner):
     ) -> bool:
         """Plan trajectory to the best reachable goal from a set of candidates.
 
-        Tries cuRobo's native goalset API first. On failure falls back to sequential
-        per-goal planning, using contact-window multi-phase planning when
-        contact_window_fraction is provided.
+        Uses sequential per-goal planning by default because the native cuRobo
+        goalset API changes the internal solve type to GOALSET, which can fail on
+        this runtime when cached CUDA graph state cannot be reset. The native API
+        can still be enabled explicitly for environments where that path is stable.
 
         Args:
             positions: Iterable of 3-element position tensors (EE goal positions).
@@ -158,28 +166,30 @@ class ExtendedCuroboPlanner(CuroboPlanner):
         start_state = self._get_current_joint_state_for_curobo()
 
         try:
-            # Try native cuRobo goalset API
-            mg = self.motion_gen
-            for api_name in ("plan_goalset", "plan_batch_goalset"):
-                fn = getattr(mg, api_name, None)
-                if fn is None:
-                    continue
-                try:
-                    result = fn(start_state, goal_pose, self.plan_config)
-                    if result is not None and self._result_succeeded(result):
-                        plan = self._extract_plan(result)
-                        if plan is not None:
-                            self._current_plan = self._finalise_plan(plan)
-                            self._plan_index = 0
-                            self.logger.info(
-                                f"plan_goalset native succeeded: {len(self._current_plan.position)} waypoints"
-                            )
-                            return True
-                except Exception as exc:
-                    self.logger.debug(f"{api_name} failed: {exc}")
+            if self._use_native_goalset:
+                mg = self.motion_gen
+                for api_name in ("plan_goalset", "plan_batch_goalset"):
+                    fn = getattr(mg, api_name, None)
+                    if fn is None:
+                        continue
+                    try:
+                        result = fn(start_state, goal_pose, self.plan_config)
+                        if result is not None and self._result_succeeded(result):
+                            plan = self._extract_plan(result)
+                            if plan is not None:
+                                self._current_plan = self._finalise_plan(plan)
+                                self._plan_index = 0
+                                self.logger.info(
+                                    f"plan_goalset native succeeded: {len(self._current_plan.position)} waypoints"
+                                )
+                                return True
+                    except Exception as exc:
+                        self.logger.debug(f"{api_name} failed: {exc}")
 
-            # Fallback: sequential per-goal planning
-            self.logger.info("plan_goalset: native failed, falling back to sequential planning")
+                self.logger.info("plan_goalset: native failed, falling back to sequential planning")
+            else:
+                self.logger.info("plan_goalset: native goalset disabled, using sequential planning")
+
             for pose in poses:
                 try:
                     success = (

@@ -64,9 +64,9 @@ class ArcIKRecoveryPolicy:
         device: torch.device | str,
         *,
         watched_states: ArcStates | Sequence[ArcStates] = ArcStates.APPROACHING_PLACING_ABOVE,
-        retreat_height: float = 0.12,
+        retreat_height: float = 0.05,
         retreat_height_step: float = 0.03,
-        retreat_lateral_radius: float = 0.0,
+        retreat_lateral_radius: float = 0.05,
         retreat_lateral_radius_step: float = 0.03,
         retreat_position_tolerance: float = 0.015,
         max_retreat_steps: int = 12,
@@ -164,6 +164,9 @@ class ArcIKRecoveryPolicy:
             self._watched_state_values.to(device=arc_state.device, dtype=arc_state.dtype),
         )
         inactive_env_ids = torch.nonzero(~active_state_mask, as_tuple=False).flatten()
+        exiting_recovery_env_ids = inactive_env_ids[self._phase[inactive_env_ids] == self._PHASE_RETREAT]
+        if exiting_recovery_env_ids.numel() > 0:
+            watchdog_reset_env_ids.extend(exiting_recovery_env_ids.tolist())
         if inactive_env_ids.numel() > 0:
             self.reset(inactive_env_ids)
 
@@ -186,6 +189,7 @@ class ArcIKRecoveryPolicy:
 
         retreat_env_ids = torch.nonzero(self._phase == self._PHASE_RETREAT, as_tuple=False).flatten()
         if retreat_env_ids.numel() > 0:
+            watchdog_reset_env_ids.extend(retreat_env_ids.tolist())
             command[retreat_env_ids] = self._retreat_command[retreat_env_ids]
             self._retreat_steps[retreat_env_ids] += 1
             retreat_reached = self._retreat_reached(retreat_env_ids, tcp_position)

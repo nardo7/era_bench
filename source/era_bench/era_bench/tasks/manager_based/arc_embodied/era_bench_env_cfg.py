@@ -148,6 +148,8 @@ class EventCfg:
         },
     )
 
+    init_reserve_cube_stacks_positions = EventTerm(func=mdp.init_reserve_cubes_positions, mode="reset")
+
     sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
 
 
@@ -191,7 +193,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # general settings
         self.decimation = 5
-        self.episode_length_s = 10.0
+        self.episode_length_s = 80.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render_interval = 2

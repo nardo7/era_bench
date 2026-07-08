@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -45,6 +45,7 @@ class ArcIKWatchdog:
         *,
         watched_states: ArcStates | Sequence[ArcStates] = ArcStates.APPROACHING_PLACING_ABOVE,
         patience: int = 10,
+        divergence_patience: int = 10,
         min_improvement: float = 1e-3,
         divergence_ratio: float = 1.25,
         divergence_abs_delta: float = 0.05,
@@ -53,6 +54,9 @@ class ArcIKWatchdog:
         rewarn_abs_delta: float = 0.05,
     ) -> None:
         self._watched_states = _normalize_watched_states(watched_states)
+        if divergence_patience <= 0:
+            raise ValueError(f"Expected divergence_patience > 0, got {divergence_patience}.")
+        self._divergence_patience = divergence_patience
         self._rewarn_ratio = rewarn_ratio
         self._rewarn_abs_delta = rewarn_abs_delta
         self._watchdog = ProgressWatchdog(
@@ -71,6 +75,7 @@ class ArcIKWatchdog:
         )
         self._prev_stalled = torch.zeros(num_envs, dtype=torch.bool, device=self._watchdog.device)
         self._prev_diverged = torch.zeros(num_envs, dtype=torch.bool, device=self._watchdog.device)
+        self._divergent_steps = torch.zeros(num_envs, dtype=torch.int64, device=self._watchdog.device)
         self._last_warned_error = torch.full((num_envs,), torch.inf, dtype=torch.float32, device=self._watchdog.device)
 
     def reset(self, env_ids: torch.Tensor | list[int] | None = None) -> None:
@@ -78,6 +83,7 @@ class ArcIKWatchdog:
         if env_ids is None:
             self._prev_stalled.zero_()
             self._prev_diverged.zero_()
+            self._divergent_steps.zero_()
             self._last_warned_error.fill_(torch.inf)
             return
         if isinstance(env_ids, torch.Tensor):
@@ -86,6 +92,7 @@ class ArcIKWatchdog:
             resolved_env_ids = torch.tensor(env_ids, device=self._watchdog.device, dtype=torch.long)
         self._prev_stalled[resolved_env_ids] = False
         self._prev_diverged[resolved_env_ids] = False
+        self._divergent_steps[resolved_env_ids] = 0
         self._last_warned_error[resolved_env_ids] = torch.inf
 
     def update(
@@ -105,6 +112,7 @@ class ArcIKWatchdog:
             arc_state,
             self._watched_state_values.to(device=arc_state.device, dtype=arc_state.dtype),
         )
+
         inactive_env_ids = torch.nonzero(~active_mask, as_tuple=False).flatten()
         if inactive_env_ids.numel() > 0:
             self.reset(inactive_env_ids)
@@ -117,18 +125,22 @@ class ArcIKWatchdog:
 
         watchdog_result = self._watchdog.update(error)
         new_stall = active_mask & watchdog_result.stalled & ~self._prev_stalled
-        new_divergence = active_mask & watchdog_result.diverged & ~self._prev_diverged
+        raw_divergence = active_mask & watchdog_result.diverged
+        self._divergent_steps.copy_(
+            torch.where(raw_divergence, self._divergent_steps + 1, torch.zeros_like(self._divergent_steps))
+        )
+        confirmed_divergence = raw_divergence & (self._divergent_steps >= self._divergence_patience)
+        warning_watchdog_result = replace(watchdog_result, diverged=confirmed_divergence)
+        new_divergence = confirmed_divergence & ~self._prev_diverged
         worsening_threshold = torch.maximum(
             self._last_warned_error * self._rewarn_ratio,
             self._last_warned_error + self._rewarn_abs_delta,
         )
-        worsened_divergence = (
-            active_mask & watchdog_result.diverged & self._prev_diverged & (watchdog_result.error > worsening_threshold)
-        )
+        worsened_divergence = confirmed_divergence & self._prev_diverged & (watchdog_result.error > worsening_threshold)
         warning_env_ids = torch.nonzero(new_stall | new_divergence | worsened_divergence, as_tuple=False).flatten()
 
         warning_messages = tuple(
-            self._format_warning(env_id=int(env_id), arc_state=arc_state, watchdog_result=watchdog_result)
+            self._format_warning(env_id=int(env_id), arc_state=arc_state, watchdog_result=warning_watchdog_result)
             for env_id in warning_env_ids.tolist()
         )
 
@@ -145,7 +157,7 @@ class ArcIKWatchdog:
         self._prev_diverged.copy_(
             torch.where(
                 active_mask,
-                watchdog_result.diverged,
+                confirmed_divergence,
                 torch.zeros_like(self._prev_diverged),
             )
         )
