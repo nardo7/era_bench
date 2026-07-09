@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import torch
-from typing import TYPE_CHECKING, cast
+from typing import Any, TYPE_CHECKING, cast
 
 from era_bench.tasks.manager_based.common.geometry_utils import mirror_points_across_line
 from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
 from isaaclab.assets import RigidObject
+from isaaclab.managers import ManagerTermBase
 from isaaclab.sensors import FrameTransformer
 from ...common.utils import line_direction_xy_from_quat
 
@@ -23,6 +24,132 @@ def _signed_distance_to_line(
         line_dir_xy[:, 0].unsqueeze(1) * points_to_line[:, :, 1]
         - line_dir_xy[:, 1].unsqueeze(1) * points_to_line[:, :, 0]
     )
+
+
+def _as_env_major_positions(env: EraBenchEnv, positions: torch.Tensor) -> torch.Tensor:
+    """Normalize positions to shape ``[num_envs, num_points, dim]``."""
+    if positions.ndim == 2:
+        positions = positions.unsqueeze(1)
+    if positions.shape[0] == env.num_envs:
+        return positions
+    if positions.ndim >= 2 and positions.shape[1] == env.num_envs:
+        return positions.transpose(0, 1)
+    raise ValueError(f"Unexpected position tensor shape {tuple(positions.shape)} for {env.num_envs} envs.")
+
+
+def _targets_to_padded_env_major(
+    env: EraBenchEnv,
+    targets: list[torch.Tensor] | torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return padded targets ``[E, T_max, 3]`` and valid target counts ``[E]``."""
+    if isinstance(targets, torch.Tensor):
+        env_major = _as_env_major_positions(env, targets)[..., :3]
+        counts = torch.full((env.num_envs,), env_major.shape[1], device=env.device, dtype=torch.long)
+        return env_major, counts
+
+    if len(targets) != env.num_envs:
+        raise ValueError(f"Ragged target list must have length {env.num_envs}, got {len(targets)}.")
+
+    counts_list: list[int] = []
+    for target in targets:
+        target_dev = target.to(device=env.device)
+        if target_dev.ndim == 1:
+            target_dev = target_dev.unsqueeze(0)
+        elif target_dev.ndim > 2:
+            raise ValueError(f"Unexpected ragged target tensor shape {tuple(target_dev.shape)}.")
+        counts_list.append(target_dev.shape[0])
+
+    counts = torch.tensor(counts_list, device=env.device, dtype=torch.long)
+    max_targets = int(counts.max().item()) if counts.numel() > 0 else 0
+    padded = torch.zeros((env.num_envs, max_targets, 3), device=env.device)
+    for env_id, target in enumerate(targets):
+        target_dev = target.to(device=env.device)
+        if target_dev.ndim == 1:
+            target_dev = target_dev.unsqueeze(0)
+        if target_dev.shape[0] > 0:
+            padded[env_id, : target_dev.shape[0]] = target_dev[..., :3]
+    return padded, counts
+
+
+class no_progress(ManagerTermBase):
+    """Terminate episodes whose end-effector pose does not move enough across steps."""
+
+    def __init__(self, cfg, env) -> None:
+        super().__init__(cfg, env)
+        params = cast(dict[str, Any], cfg.params)
+        self._patience = int(params.get("patience", 25))
+        self._warmup_steps = int(params.get("warmup_steps", 0))
+        self._position_delta_threshold = float(
+            params.get("min_step_position_delta", params.get("min_improvement", 5.0e-4))
+        )
+        self._orientation_delta_threshold = float(params.get("orientation_delta_threshold", 0.0))
+        self._step_count = torch.zeros(self.num_envs, dtype=torch.int64, device=self.device)
+        self._stagnant_steps = torch.zeros(self.num_envs, dtype=torch.int64, device=self.device)
+        self._prev_ee_pos = torch.full((self.num_envs, 3), torch.nan, dtype=torch.float32, device=self.device)
+        self._prev_ee_quat = torch.full((self.num_envs, 4), torch.nan, dtype=torch.float32, device=self.device)
+
+    def reset(self, env_ids=None) -> None:
+        self._step_count[env_ids] = 0
+        self._stagnant_steps[env_ids] = 0
+        self._prev_ee_pos[env_ids] = torch.nan
+        self._prev_ee_quat[env_ids] = torch.nan
+
+    def __call__(
+        self,
+        env: EraBenchEnv,
+        patience: int = 25,
+        min_improvement: float = 5.0e-4,
+        min_step_position_delta: float = 5.0e-4,
+        orientation_delta_threshold: float = 0.0,
+        divergence_ratio: float | None = None,
+        divergence_abs_delta: float | None = None,
+        warmup_steps: int = 0,
+        trigger_on_divergence: bool = False,
+        goal_change_reset_threshold: float = 0.02,
+    ) -> torch.Tensor:
+        del (
+            patience,
+            min_improvement,
+            min_step_position_delta,
+            orientation_delta_threshold,
+            divergence_ratio,
+            divergence_abs_delta,
+            warmup_steps,
+            trigger_on_divergence,
+            goal_change_reset_threshold,
+        )
+        ee_frame_sensor: FrameTransformer = env.scene["ee_frame"]
+        ee_pos = ee_frame_sensor.data.target_pos_w[:, 0, :].clone() - env.scene.env_origins[:, 0:3]
+        ee_quat = ee_frame_sensor.data.target_quat_w[:, 0, :].clone()
+
+        valid_pose = torch.isfinite(ee_pos).all(dim=1) & torch.isfinite(ee_quat).all(dim=1)
+        if not torch.any(valid_pose):
+            self.reset()
+            return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+        prev_pose_valid = torch.isfinite(self._prev_ee_pos).all(dim=1) & torch.isfinite(self._prev_ee_quat).all(dim=1)
+        comparable = valid_pose & prev_pose_valid
+
+        pos_delta = torch.linalg.norm(ee_pos - self._prev_ee_pos, dim=1)
+        moved = pos_delta > self._position_delta_threshold
+        if self._orientation_delta_threshold > 0.0:
+            quat_dot = torch.sum(ee_quat * self._prev_ee_quat, dim=1).abs().clamp(max=1.0)
+            rot_delta = 2.0 * torch.acos(quat_dot)
+            moved |= rot_delta > self._orientation_delta_threshold
+
+        moved &= comparable
+        self._stagnant_steps = torch.where(
+            moved,
+            torch.zeros_like(self._stagnant_steps),
+            torch.where(comparable, self._stagnant_steps + 1, torch.zeros_like(self._stagnant_steps)),
+        )
+
+        self._step_count += valid_pose.to(dtype=torch.int64)
+        self._prev_ee_pos.copy_(ee_pos)
+        self._prev_ee_quat.copy_(ee_quat)
+
+        active = comparable & (self._step_count > self._warmup_steps)
+        return active & (self._stagnant_steps >= self._patience)
 
 
 def are_objects_in_success_positions(
@@ -45,49 +172,6 @@ def are_objects_in_success_positions(
     if not success_positions:
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
-    def _as_env_major_positions(positions: torch.Tensor) -> torch.Tensor:
-        """Normalize positions to shape [num_envs, num_points, dim]."""
-        if positions.ndim == 2:
-            positions = positions.unsqueeze(1)
-        if positions.shape[0] == env.num_envs:
-            return positions
-        if positions.ndim >= 2 and positions.shape[1] == env.num_envs:
-            return positions.transpose(0, 1)
-        raise ValueError(f"Unexpected position tensor shape {tuple(positions.shape)} for {env.num_envs} envs.")
-
-    def _targets_to_padded_env_major(
-        targets: list[torch.Tensor] | torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return padded 3D targets [E, T_max, 3] and valid-counts [E]."""
-        if isinstance(targets, torch.Tensor):
-            env_major = _as_env_major_positions(targets)[..., :3]
-            counts = torch.full((env.num_envs,), env_major.shape[1], device=env.device, dtype=torch.long)
-            return env_major, counts
-
-        if len(targets) != env.num_envs:
-            raise ValueError(f"Ragged target list must have length {env.num_envs}, got {len(targets)}.")
-
-        counts_list: list[int] = []
-
-        for t in targets:
-            t_dev = t.to(device=env.device)
-            if t_dev.ndim == 1:
-                t_dev = t_dev.unsqueeze(0)
-            elif t_dev.ndim > 2:
-                raise ValueError(f"Unexpected ragged target tensor shape {tuple(t_dev.shape)}.")
-            counts_list.append(t_dev.shape[0])
-
-        counts = torch.tensor(counts_list, device=env.device, dtype=torch.long)
-        max_targets = int(counts.max().item()) if counts.numel() > 0 else 0
-        padded = torch.zeros((env.num_envs, max_targets, 3), device=env.device)
-        for env_id, t in enumerate(targets):
-            t_dev = t.to(device=env.device)
-            if t_dev.ndim == 1:
-                t_dev = t_dev.unsqueeze(0)
-            if t_dev.shape[0] > 0:
-                padded[env_id, : t_dev.shape[0]] = t_dev[..., :3]
-        return padded, counts
-
     reserve_cubes_by_color = env.get_reserve_cubes_positions_by_color()
     success_mask = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
 
@@ -99,7 +183,7 @@ def are_objects_in_success_positions(
         if len(target_entries) == 0:
             continue
 
-        target_positions, num_targets = _targets_to_padded_env_major(target_entries)
+        target_positions, num_targets = _targets_to_padded_env_major(env, target_entries)
         if target_positions.shape[1] == 0:
             continue
 
@@ -108,7 +192,7 @@ def are_objects_in_success_positions(
             success_mask &= num_targets == 0
             continue
 
-        reserve_positions = _as_env_major_positions(reserve_positions_raw)[..., :3]
+        reserve_positions = _as_env_major_positions(env, reserve_positions_raw)[..., :3]
         num_reserve = reserve_positions.shape[1]
         if num_reserve == 0:
             success_mask &= num_targets == 0

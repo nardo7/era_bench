@@ -16,6 +16,8 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import (
     OffsetCfg,
     VisualizationMarkersCfg,
 )
+from typing import Callable, cast
+import torch
 
 
 from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
@@ -165,6 +167,15 @@ class TerminationsCfg:
     # (1) Time out
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
+    no_progress = DoneTerm(
+        func=cast(Callable[..., torch.Tensor], mdp.no_progress),
+        params={
+            "patience": 25,
+            "min_step_position_delta": 5.0e-4,
+            "warmup_steps": 10,
+        },
+    )
+
     success = DoneTerm(
         func=mdp.are_objects_in_success_positions,
     )
@@ -193,7 +204,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # general settings
         self.decimation = 5
-        self.episode_length_s = 10.0
+        self.episode_length_s = 80.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render_interval = 2

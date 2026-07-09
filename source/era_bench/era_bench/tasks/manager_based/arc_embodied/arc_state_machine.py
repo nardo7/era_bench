@@ -99,9 +99,9 @@ def get_state_config(state: int) -> tuple[float, int]:
     if state == ARC_STATE_REST:  # REST
         return 0.05, ARC_STATE_APPROACHING_ABOVE
     elif state == ARC_STATE_APPROACHING_ABOVE:  # APPROACHING_ABOVE
-        return 0.2, ARC_STATE_APPROACHING
+        return 0.3, ARC_STATE_APPROACHING
     elif state == ARC_STATE_APPROACHING:  # APPROACHING
-        return 0.3, ARC_STATE_GRASPING
+        return 0.4, ARC_STATE_GRASPING
     elif state == ARC_STATE_GRASPING:  # GRASPING
         return 0.4, ARC_STATE_RETREATING_ABOVE
     elif state == ARC_STATE_RETREATING_ABOVE:  # RETREATING_ABOVE
@@ -171,13 +171,17 @@ def arc_state_machine_kernel(
         sm_wait_time[tid] = 0.0
         wp.printf("[INFO]: ArcStateMachine: Transitioning to state %d for env %d\n", next_state, tid)
 
+        # save position to retreat from after grasping/placing ONLY DURING TRANSITION
+        # Use the current end-effector pose (ee_pose) rather than the last desired
+        # pose so that transitions which only change the gripper state do not
+        # cause the arm to move toward a previously requested target. This keeps
+        # the arm stable when the intent is to only close/open the gripper.
+        if state == ARC_STATE_GRASPING or state == ARC_STATE_PLACING:
+            retreat_from_position[tid] = ee_pose[tid]
+
     if state == ARC_STATE_PLACING and condition:
         current_goal_objects[tid] = (current_goal_object_idx + 1) % wp.len(desired_goal_poses[tid])
         reserve_cube_poses_idx_wp[tid, color_idx] = reserve_cube_idx - 1
-
-    # save position to retreat from after grasping/placing
-    if state == ARC_STATE_GRASPING or state == ARC_STATE_PLACING:
-        retreat_from_position[tid] = des_ee_pose[tid]
 
     if state == ARC_STATE_REST:
         des_gripper_state[tid] = GripperState.OPEN
@@ -205,7 +209,7 @@ def arc_state_machine_kernel(
 
     elif state == ARC_STATE_GRASPING:
         des_gripper_state[tid] = GripperState.CLOSE
-        des_ee_pose[tid] = ee_pose[tid]
+        des_ee_pose[tid] = retreat_from_position[tid]  # hold position after grasping
 
     elif state == ARC_STATE_RETREATING_ABOVE:
         des_gripper_state[tid] = GripperState.CLOSE
@@ -222,7 +226,7 @@ def arc_state_machine_kernel(
 
     elif state == ARC_STATE_PLACING:
         des_gripper_state[tid] = GripperState.OPEN
-        des_ee_pose[tid] = ee_pose[tid]
+        des_ee_pose[tid] = retreat_from_position[tid]  # hold position after placing
 
     elif state == ARC_STATE_RETREATING_PLACING_ABOVE:
         des_gripper_state[tid] = GripperState.OPEN
@@ -327,10 +331,10 @@ class ArcStateMachine:
         self.reserve_cubes_poses = {k: self._convert_pose_tensor_for_warp(v) for k, v in reserve_cubes_poses.items()}
         reserve_cubes_stacked = torch.stack(list(self.reserve_cubes_poses.values()), dim=0).permute(1, 0, 2, 3)
         print(f"[INFO]: Reserve cube poses: {reserve_cubes_poses}")
-        initial_stack_idx = next(iter(reserve_cubes_poses.values())).shape[1] - 1
+        self.initial_stack_idx = next(iter(reserve_cubes_poses.values())).shape[1] - 1
         self.reserve_cube_poses_idx = torch.full(
             (self.num_envs, len(reserve_cubes_poses.keys())),
-            initial_stack_idx,
+            self.initial_stack_idx,
             dtype=torch.int32,
             device=device,
         )
@@ -401,6 +405,8 @@ class ArcStateMachine:
             env_ids = cast(Sequence[int], slice(None))
         self.sm_state[env_ids] = ArcStates.REST.python_value
         self.sm_wait_time[env_ids] = 0.0
+        self.current_idx_objects[env_ids] = 0
+        self.reserve_cube_poses_idx[env_ids, :] = self.initial_stack_idx
 
     def get_current_grasped_object_idx(self) -> torch.Tensor:
         return self.current_idx_objects.clone()

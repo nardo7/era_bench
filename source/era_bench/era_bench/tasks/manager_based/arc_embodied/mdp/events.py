@@ -22,7 +22,10 @@ if TYPE_CHECKING:
 
 def _get_reserve_cube_color_order(env: EraBenchEnv) -> list[Colors]:
     """Return reserve cube colors in the scene's existing name order without duplicates."""
-    return list(set(env.cfg.scene.get_reserve_cube_colors()))
+    return sorted(
+        list(set(env.cfg.scene.get_reserve_cube_colors())),
+        key=lambda c: env.cfg.scene.get_reserve_cube_colors().index(c),
+    )
 
 
 def init_reserve_cubes_positions(env: EraBenchEnv, env_ids: list[int]):
@@ -80,13 +83,13 @@ def sample_success_positions(
         torch.tensor(
             [
                 [0.0, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.335, 0.73, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [0.335, 0.73, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [0.335, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.335, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.55, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.335, 0.55, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [0.335, 0.55, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.25, 0.75, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [0.25, 0.75, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.25, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [0.25, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
             ],
             device=env.device,
         )
@@ -95,7 +98,7 @@ def sample_success_positions(
     )
 
     possible_colors = set(scene_cfg.get_reserve_cube_colors())
-    colors = [scene_cfg.get_reserve_cube_colors()[-1]] * dest_poses.shape[1]
+    colors = [scene_cfg.get_reserve_cube_colors()[0]] * dest_poses.shape[1]
 
     pairs = list(zip(colors, dest_poses.permute(1, 0, 2)))
     dest_poses_by_color: dict[Colors, torch.Tensor] = {}

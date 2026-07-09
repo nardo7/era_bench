@@ -134,7 +134,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     @property
     def separation_distance(self) -> float:
         """Minimum separation distance between cubes in this scene config."""
-        return 0.05  # in meters
+        return 0.02  # in meters
 
     @property
     def reserve_cubes_amount_per_color(self) -> int:

@@ -21,7 +21,7 @@ class ExtendedCuroboPlanner(CuroboPlanner):
     """
 
     _MAX_TASK_TRAJECTORY_DISTANCE = torch.linalg.vector_norm(
-        torch.tensor([0.8, -0.1, 0.25]) - torch.tensor([-0.33, 0.73, 0.025])
+        torch.tensor([0.6, -0.1, 0.23]) - torch.tensor([-0.33, 0.73, 0.025])
     )
     _PHASE_LOG_FILENAME = "curobo_phase_debug.jsonl"
 
@@ -295,27 +295,27 @@ class ExtendedCuroboPlanner(CuroboPlanner):
             goal_pose=goal_pose,
             contact_window_fraction=contact_window_fraction,
         )
-        self._log_phase_calculation(
-            phase="budget",
-            success=True,
-            contact=False,
-            start_position=self._pose_position_to_list(start_pose),
-            goal_position=self._pose_position_to_list(goal_pose),
-            distance=self._cartesian_distance(start_pose, goal_pose),
-            contact_window_fraction=contact_window_fraction,
-            allocated_steps={"entry": entry_steps, "middle": middle_steps, "exit": exit_steps},
-        )
+        # self._log_phase_calculation(
+        #     phase="budget",
+        #     success=True,
+        #     contact=False,
+        #     start_position=self._pose_position_to_list(start_pose),
+        #     goal_position=self._pose_position_to_list(goal_pose),
+        #     distance=self._cartesian_distance(start_pose, goal_pose),
+        #     contact_window_fraction=contact_window_fraction,
+        #     allocated_steps={"entry": entry_steps, "middle": middle_steps, "exit": exit_steps},
+        # )
 
         # Phase 1: contact-allowed start window
         phase1_success = self._plan_to_contact_pose(start_state=start_state, goal_pose=entry_pose, contact=True)
-        self._log_phase_calculation(
-            phase="entry",
-            success=phase1_success,
-            contact=True,
-            start_position=self._pose_position_to_list(start_pose),
-            goal_position=self._pose_position_to_list(entry_pose),
-            allocated_steps=entry_steps,
-        )
+        # self._log_phase_calculation(
+        #     phase="entry",
+        #     success=phase1_success,
+        #     contact=True,
+        #     start_position=self._pose_position_to_list(start_pose),
+        #     goal_position=self._pose_position_to_list(entry_pose),
+        #     allocated_steps=entry_steps,
+        # )
         if not phase1_success:
             self.logger.debug("_plan_to_contact_with_window: phase 1 (entry) failed")
             return False
@@ -324,16 +324,16 @@ class ExtendedCuroboPlanner(CuroboPlanner):
 
         # Phase 2: collision-checked middle
         mid_start = self._joint_state_from_plan_end(phase1)
-        mid_start_pose = self.get_ee_pose(mid_start)
+        # mid_start_pose = self.get_ee_pose(mid_start)
         phase2_success = self._plan_to_contact_pose(start_state=mid_start, goal_pose=exit_pose, contact=False)
-        self._log_phase_calculation(
-            phase="middle",
-            success=phase2_success,
-            contact=False,
-            start_position=self._pose_position_to_list(mid_start_pose),
-            goal_position=self._pose_position_to_list(exit_pose),
-            allocated_steps=middle_steps,
-        )
+        # self._log_phase_calculation(
+        #     phase="middle",
+        #     success=phase2_success,
+        #     contact=False,
+        #     start_position=self._pose_position_to_list(mid_start_pose),
+        #     goal_position=self._pose_position_to_list(exit_pose),
+        #     allocated_steps=middle_steps,
+        # )
         if not phase2_success:
             self.logger.debug("_plan_to_contact_with_window: phase 2 (middle) failed")
             return False
@@ -343,16 +343,16 @@ class ExtendedCuroboPlanner(CuroboPlanner):
 
         # Phase 3: contact-allowed end window
         end_start = self._joint_state_from_plan_end(middle_plan)
-        end_start_pose = self.get_ee_pose(end_start)
+        # end_start_pose = self.get_ee_pose(end_start)
         phase3_success = self._plan_to_contact_pose(start_state=end_start, goal_pose=goal_pose, contact=True)
-        self._log_phase_calculation(
-            phase="exit",
-            success=phase3_success,
-            contact=True,
-            start_position=self._pose_position_to_list(end_start_pose),
-            goal_position=self._pose_position_to_list(goal_pose),
-            allocated_steps=exit_steps,
-        )
+        # self._log_phase_calculation(
+        #     phase="exit",
+        #     success=phase3_success,
+        #     contact=True,
+        #     start_position=self._pose_position_to_list(end_start_pose),
+        #     goal_position=self._pose_position_to_list(goal_pose),
+        #     allocated_steps=exit_steps,
+        # )
         if not phase3_success:
             self.logger.debug("_plan_to_contact_with_window: phase 3 (exit) failed")
             return False
@@ -361,14 +361,14 @@ class ExtendedCuroboPlanner(CuroboPlanner):
 
         self._current_plan = phase2.stack(exit_plan.trim_trajectory(1, None))
         self._plan_index = 0
-        self._log_phase_calculation(
-            phase="final",
-            success=True,
-            contact=False,
-            start_position=self._pose_position_to_list(start_pose),
-            goal_position=self._pose_position_to_list(goal_pose),
-            final_waypoints=len(self._current_plan.position),
-        )
+        # self._log_phase_calculation(
+        #     phase="final",
+        #     success=True,
+        #     contact=False,
+        #     start_position=self._pose_position_to_list(start_pose),
+        #     goal_position=self._pose_position_to_list(goal_pose),
+        #     final_waypoints=len(self._current_plan.position),
+        # )
         self.logger.info(f"_plan_to_contact_with_window succeeded: {len(self._current_plan.position)} waypoints")
         return True
 
@@ -415,62 +415,56 @@ class ExtendedCuroboPlanner(CuroboPlanner):
         scaled_steps = min_total_steps + int(round((max_total_steps - min_total_steps) * span_ratio))
         return min(max(scaled_steps, min_total_steps), max_total_steps)
 
-    def _log_phase_calculation(self, phase: str, success: bool, contact: bool, **extra_fields) -> None:
-        """Append one phase event to a local JSONL debug file."""
-        payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "phase": phase,
-            "success": success,
-            "contact": contact,
-        }
-        payload.update(extra_fields)
+    # def _log_phase_calculation(self, phase: str, success: bool, contact: bool, **extra_fields) -> None:
+    #     """Append one phase event to a local JSONL debug file."""
+    #     payload = {
+    #         "timestamp": datetime.now(timezone.utc).isoformat(),
+    #         "phase": phase,
+    #         "success": success,
+    #         "contact": contact,
+    #     }
+    #     payload.update(extra_fields)
 
-        start_position = payload.get("start_position")
-        goal_position = payload.get("goal_position")
-        if isinstance(start_position, list) and isinstance(goal_position, list):
-            payload["start_goal_distance"] = self._distance_between_positions(start_position, goal_position)
+    #     start_position = payload.get("start_position")
+    #     goal_position = payload.get("goal_position")
+    #     if isinstance(start_position, list) and isinstance(goal_position, list):
+    #         payload["start_goal_distance"] = self._distance_between_positions(start_position, goal_position)
 
-        attached_object = self._get_attached_object_log_data()
-        if attached_object is not None:
-            payload["attached_object"] = attached_object
+    #     attached_object = self._get_attached_object_log_data()
+    #     if attached_object is not None:
+    #         payload["attached_object"] = attached_object
 
-        try:
-            self._phase_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._phase_log_path.open("a", encoding="utf-8") as file:
-                file.write(json.dumps(payload) + "\n")
-        except Exception as exc:
-            self.logger.debug(f"Phase log write failed: {exc}")
+    #     try:
+    #         self._phase_log_path.parent.mkdir(parents=True, exist_ok=True)
+    #         with self._phase_log_path.open("a", encoding="utf-8") as file:
+    #             file.write(json.dumps(payload) + "\n")
+    #     except Exception as exc:
+    #         self.logger.debug(f"Phase log write failed: {exc}")
 
-    def _pose_position_to_list(self, pose: Pose) -> list[float]:
-        """Convert Pose.position into a JSON-serializable xyz list."""
-        assert pose.position is not None
-        position = pose.position.squeeze(0) if pose.position.ndim > 1 else pose.position
-        return [float(value) for value in position.tolist()]
+    # def _distance_between_positions(self, start_position: list[float], goal_position: list[float]) -> float:
+    #     """Compute Euclidean distance between two xyz positions."""
+    #     start_tensor = torch.tensor(start_position, dtype=torch.float32)
+    #     goal_tensor = torch.tensor(goal_position, dtype=torch.float32)
+    #     return float(torch.linalg.vector_norm(goal_tensor - start_tensor).item())
 
-    def _distance_between_positions(self, start_position: list[float], goal_position: list[float]) -> float:
-        """Compute Euclidean distance between two xyz positions."""
-        start_tensor = torch.tensor(start_position, dtype=torch.float32)
-        goal_tensor = torch.tensor(goal_position, dtype=torch.float32)
-        return float(torch.linalg.vector_norm(goal_tensor - start_tensor).item())
+    # def _get_attached_object_log_data(self) -> dict[str, object] | None:
+    #     """Return attached object name and local position for phase logging."""
+    #     attached_objects = self.get_attached_objects()
+    #     if not attached_objects:
+    #         return None
 
-    def _get_attached_object_log_data(self) -> dict[str, object] | None:
-        """Return attached object name and local position for phase logging."""
-        attached_objects = self.get_attached_objects()
-        if not attached_objects:
-            return None
+    #     object_name = attached_objects[0]
+    #     rigid_objects = self.env.scene.rigid_objects
+    #     if object_name not in rigid_objects:
+    #         return {"name": object_name, "position": None}
 
-        object_name = attached_objects[0]
-        rigid_objects = self.env.scene.rigid_objects
-        if object_name not in rigid_objects:
-            return {"name": object_name, "position": None}
-
-        env_id = int(getattr(self, "env_id", 0))
-        origin = self.env.scene.env_origins[env_id]
-        object_position = rigid_objects[object_name].data.root_pos_w[env_id] - origin
-        return {
-            "name": object_name,
-            "position": [float(value) for value in object_position.tolist()],
-        }
+    #     env_id = int(getattr(self, "env_id", 0))
+    #     origin = self.env.scene.env_origins[env_id]
+    #     object_position = rigid_objects[object_name].data.root_pos_w[env_id] - origin
+    #     return {
+    #         "name": object_name,
+    #         "position": [float(value) for value in object_position.tolist()],
+    #     }
 
     def _cartesian_distance(self, start_pose: Pose, goal_pose: Pose) -> float:
         """Compute the Cartesian distance between two EE poses."""

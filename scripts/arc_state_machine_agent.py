@@ -192,7 +192,7 @@ def main():
 
     # desired object orientation (we only do position control of object)
 
-    desired_poses_amount = env.success_positions[Colors.RED][0].shape[0]
+    desired_poses_amount = env.success_positions[Colors.BLUE][0].shape[0]
     desired_orientation = torch.zeros((env.num_envs, desired_poses_amount, 4), device=env.device)
     desired_orientation[:, :, 1] = 1.0
     reserve_cube_stacks = env.get_reserve_cubes_poses_by_color()
@@ -222,14 +222,14 @@ def main():
         min_improvement=1e-3,
         divergence_ratio=1.25,
         warmup_steps=3,
-        watched_states=[ArcStates.APPROACHING_PLACING_ABOVE],
+        watched_states=[ArcStates.RETREATING_PLACING_ABOVE, ArcStates.APPROACHING_PLACING],
     )
     place_above_recovery = ArcIKRecoveryPolicy(
         num_envs=env.num_envs,
         device=env.device,
         curobo_planner=planner,
         session_label=args_cli.task,
-        watched_states=[ArcStates.APPROACHING_PLACING_ABOVE],
+        watched_states=[ArcStates.RETREATING_PLACING_ABOVE, ArcStates.APPROACHING_PLACING],
     )
 
     # simulate environment
@@ -304,7 +304,6 @@ def main():
 
             if not plan_success:
                 print("[WARNING]: Skipping execution for this state-machine step with CUROBO. trying with plain IK.")
-
                 obs, reward, terminated, truncated, info = env.step(recovery_update.command)
                 state_steps = 1
             else:
