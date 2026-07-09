@@ -53,16 +53,6 @@ class ArcStates(Enum):
     RETREATING_PLACING_ABOVE = (9, wp.constant(9), wp.constant(0.1))
 
 
-COLOR_TO_INDEX = {
-    ArcColors.RED: 0,
-    ArcColors.BLUE: 1,
-    ArcColors.GREEN: 2,
-    ArcColors.YELLOW: 3,
-}
-
-INDEX_TO_COLOR = {v: k for k, v in COLOR_TO_INDEX.items()}
-
-
 # Warp kernels cannot consume Python Enum objects directly.
 # Bridge enum members to plain module-level Warp constants for kernel use.
 ARC_STATE_REST = ArcStates.REST.warp_value
@@ -75,10 +65,6 @@ ARC_STATE_APPROACHING_ABOVE = ArcStates.APPROACHING_ABOVE.warp_value
 ARC_STATE_RETREATING_ABOVE = ArcStates.RETREATING_ABOVE.warp_value
 ARC_STATE_APPROACHING_PLACING_ABOVE = ArcStates.APPROACHING_PLACING_ABOVE.warp_value
 ARC_STATE_RETREATING_PLACING_ABOVE = ArcStates.RETREATING_PLACING_ABOVE.warp_value
-
-
-def is_vec_t(vector_coord: wp.vec3) -> TypeGuard[wp.Scalar]:
-    return True
 
 
 @wp.func
@@ -266,21 +252,26 @@ class ArcStateMachine:
 
     @staticmethod
     def _flatten_color_pose_dict(
-        poses_by_color: dict[ArcColors, torch.Tensor], device: torch.device
+        poses_by_color: dict[ArcColors, torch.Tensor],
+        color_to_index: dict[ArcColors, int],
+        device: torch.device,
     ) -> tuple[torch.Tensor, torch.Tensor, tuple[ArcColors, ...]]:
         flattened_poses: list[torch.Tensor] = []
         flattened_colors: list[torch.Tensor] = []
         color_order: list[ArcColors] = []
 
         for color_name, pose_tensor in poses_by_color.items():
-            if color_name not in COLOR_TO_INDEX:
-                raise ValueError(f"Unsupported color '{color_name}'. Expected one of {tuple(COLOR_TO_INDEX)}")
+            if color_name not in color_to_index:
+                raise ValueError(
+                    f"Color '{color_name}' is in dest_poses but not in reserve_cubes_poses. "
+                    f"Available colors: {tuple(color_to_index)}"
+                )
 
             color_order.append(color_name)
             warp_pose_tensor = ArcStateMachine._convert_pose_tensor_for_warp(pose_tensor)
             flattened_poses.append(warp_pose_tensor)
             flattened_colors.append(
-                torch.full(warp_pose_tensor.shape[:2], COLOR_TO_INDEX[color_name], dtype=torch.int32, device=device)
+                torch.full(warp_pose_tensor.shape[:2], color_to_index[color_name], dtype=torch.int32, device=device)
             )
 
         if not flattened_poses:
@@ -323,9 +314,14 @@ class ArcStateMachine:
             for color_name, pose_tensor in reserve_cubes_poses.items():
                 self._log_shape(f"reserve_cubes_poses[{color_name}]", pose_tensor)
 
+        # Derive color <-> index mapping from the iteration order of reserve_cubes_poses.
+        # This mapping must stay in sync with the axis order of reserve_cubes_stacked below.
+        self.color_to_index: dict[ArcColors, int] = {color: idx for idx, color in enumerate(reserve_cubes_poses.keys())}
+        self.index_to_color: dict[int, ArcColors] = {idx: color for color, idx in self.color_to_index.items()}
+
         # goals
         self.dest_poses, self.dest_pose_colors, self.dest_pose_color_order = self._flatten_color_pose_dict(
-            dest_poses, device
+            dest_poses, self.color_to_index, device
         )
         # save reserve cubes positions
         self.reserve_cubes_poses = {k: self._convert_pose_tensor_for_warp(v) for k, v in reserve_cubes_poses.items()}
@@ -416,7 +412,7 @@ class ArcStateMachine:
     def get_current_goal_color(self, env_id: int) -> ArcColors:
         """Get the color of the current goal object for a specific environment."""
         color_idx = self.get_current_goal_color_idx(env_id)
-        return INDEX_TO_COLOR[color_idx]
+        return self.index_to_color[color_idx]
 
     def get_current_stack_index(self, env_id: int) -> int:
         """Get the current index of the reserve cube stack for a specific environment and color."""

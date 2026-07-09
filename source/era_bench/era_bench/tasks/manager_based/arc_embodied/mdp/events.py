@@ -9,7 +9,7 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
 
-from era_bench.tasks.manager_based.arc_embodied.config import Colors
+from era_bench.tasks.manager_based.arc_embodied.config import Colors, DEFAULT_COLORS
 
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 def _get_reserve_cube_color_order(env: EraBenchEnv) -> list[Colors]:
     """Return reserve cube colors in the scene's existing name order without duplicates."""
-    return list(dict.fromkeys(env.cfg.scene.get_reserve_cube_colors()))
+    return list(set(env.cfg.scene.get_reserve_cube_colors()))
 
 
 def init_reserve_cubes_positions(env: EraBenchEnv, env_ids: list[int]):
@@ -41,7 +41,7 @@ def init_reserve_cubes_positions(env: EraBenchEnv, env_ids: list[int]):
     y_offsets = [-0.1, 0.1]
     base_cube_center_height = scene_cfg.cubes_size[2] / 2
     colors = _get_reserve_cube_color_order(env)
-    for color_idx, color in enumerate(colors):
+    for color_idx, color in enumerate(DEFAULT_COLORS[:2]):
         for i in range(scene_cfg.reserve_cubes_amount_per_color):
             cube_name = scene_cfg.get_reserve_cube_name(color, i)
 
@@ -95,7 +95,7 @@ def sample_success_positions(
     )
 
     possible_colors = set(scene_cfg.get_reserve_cube_colors())
-    colors = [scene_cfg.get_reserve_cube_colors()[0]] * dest_poses.shape[1]
+    colors = [scene_cfg.get_reserve_cube_colors()[-1]] * dest_poses.shape[1]
 
     pairs = list(zip(colors, dest_poses.permute(1, 0, 2)))
     dest_poses_by_color: dict[Colors, torch.Tensor] = {}

@@ -191,7 +191,8 @@ def main():
     scene_cfg = cast(EraBenchSceneCfg, env.scene.cfg)
 
     # desired object orientation (we only do position control of object)
-    desired_poses_amount = env.success_positions[list(env.success_positions.keys())[0]][0].shape[0]
+
+    desired_poses_amount = env.success_positions[Colors.RED][0].shape[0]
     desired_orientation = torch.zeros((env.num_envs, desired_poses_amount, 4), device=env.device)
     desired_orientation[:, :, 1] = 1.0
     reserve_cube_stacks = env.get_reserve_cubes_poses_by_color()
