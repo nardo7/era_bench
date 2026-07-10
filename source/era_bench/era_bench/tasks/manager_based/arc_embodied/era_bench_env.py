@@ -9,6 +9,7 @@ from isaaclab.envs import ManagerBasedRLMimicEnv
 from .era_bench_env_cfg import EraBenchEnvCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.assets import Articulation, RigidObject
+import isaaclab.utils.math as math_utils
 
 
 class EraBenchEnv(ManagerBasedRLMimicEnv):
@@ -19,11 +20,95 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
 
     def __init__(self, cfg: EraBenchEnvCfg, **kwargs):
         super().__init__(cfg, **kwargs)
+        self._arm_pose_hold_active = False
+        self._held_arm_pose_action: Tensor | None = None
+        self._held_arm_joint_targets: Tensor | None = None
+        # Match the state-machine arrival threshold so the hold is latched
+        # before the first gripper-contact step, not one step afterwards.
+        self._arm_pose_hold_position_tolerance = 1.0e-2
+        self._arm_pose_hold_orientation_tolerance = 2.0e-2
         self._joint_replay_debug_log_path = os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__), "..", "..", "..", "..", "..", "..", "logs", "joint_replay_debug.log"
             )
         )
+
+    def _action_slice(self, term_name: str) -> slice:
+        """Return the slice of the concatenated action belonging to a named term."""
+        start = 0
+        for name, action_dim in zip(self.action_manager.active_terms, self.action_manager.action_term_dim):
+            end = start + action_dim
+            if name == term_name:
+                return slice(start, end)
+            start = end
+        raise KeyError(f"Action term '{term_name}' is not active.")
+
+    def _clear_arm_pose_hold(self) -> None:
+        self._arm_pose_hold_active = False
+        self._held_arm_pose_action = None
+        self._held_arm_joint_targets = None
+
+    def _should_hold_arm_pose(self, action: Tensor) -> bool:
+        """Return whether the arm target is a stationary grasp-center pose.
+
+        The hold starts only when the commanded absolute pose already matches the
+        measured grasp-center pose. Once started, it remains active while that arm
+        pose command is unchanged, even if contact forces perturb the TCP.
+        """
+        arm_action_slice = self._action_slice("arm_actions")
+        arm_action = action[:, arm_action_slice].to(self.device)
+
+        if self._arm_pose_hold_active:
+            if self._held_arm_pose_action is not None and torch.allclose(
+                arm_action, self._held_arm_pose_action, rtol=0.0, atol=1.0e-6
+            ):
+                print("[INFO]: Holding arm pose.")
+                return True
+            self._clear_arm_pose_hold()
+
+        arm_action_term = self.action_manager.get_term("arm_actions")
+        current_pos, current_quat = arm_action_term._compute_frame_pose()
+        position_error = torch.linalg.vector_norm(arm_action[:, :3] - current_pos, dim=1)
+        orientation_error = math_utils.quat_error_magnitude(arm_action[:, 3:7], current_quat)
+        target_is_current_pose = (position_error <= self._arm_pose_hold_position_tolerance) & (
+            orientation_error <= self._arm_pose_hold_orientation_tolerance
+        )
+
+        if not bool(torch.all(target_is_current_pose)):
+            return False
+
+        robot: Articulation = self.scene["robot"]
+        arm_joint_ids, _ = robot.find_joints(["panda_joint.*"], preserve_order=True)
+        self._held_arm_pose_action = arm_action.clone()
+        self._held_arm_joint_targets = robot.data.joint_pos[:, arm_joint_ids].clone()
+        self._arm_pose_hold_active = True
+        print("[INFO]: Latched hard arm hold at stationary pose.")
+        return True
+
+    def step(self, action: Tensor):
+        """Step with DiffIK motion, or a joint-space hold at a stationary target pose.
+
+        This keeps the public action interface unchanged. When an absolute arm pose
+        is already reached and remains unchanged, the arm holds its current joint
+        targets while the gripper action is still applied normally. A changed arm
+        pose immediately resumes the configured DiffIK action term.
+        """
+        if not self._should_hold_arm_pose(action):
+            return super().step(action)
+
+        if self._held_arm_joint_targets is None:
+            raise RuntimeError("Missing arm joint targets for stationary-pose hold.")
+        gripper_action = action[:, self._action_slice("gripper_action")]
+        return self.step_joint_targets(
+            self._held_arm_joint_targets,
+            gripper_raw_action=gripper_action,
+            hard_hold_arm=True,
+        )
+
+    def _reset_idx(self, env_ids):
+        super()._reset_idx(env_ids)
+        if hasattr(self, "_arm_pose_hold_active"):
+            self._clear_arm_pose_hold()
 
     def _log_joint_replay_debug(self, phase: str) -> None:
         robot: Articulation = self.scene["robot"]
@@ -92,17 +177,29 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
         *,
         joint_names: list[str] | tuple[str, ...] | None = None,
         gripper_raw_action: Tensor | None = None,
+        hard_hold_arm: bool = False,
     ):
         """Step the environment while directly applying joint targets.
 
         This mirrors ManagerBasedRLEnv.step, but replaces the action-manager
-        application path with direct arm/gripper joint targets.
+        application path with direct arm/gripper joint targets. When
+        ``hard_hold_arm`` is true, the arm joint state is pinned before every
+        physics substep; this is intentionally stronger than a PD position
+        target and prevents contact deflection from accumulating.
         """
 
         arm_joint_targets, joint_names = self._filter_arm_joint_replay_targets(
             arm_joint_targets,
             joint_names=joint_names,
         )
+        arm_joint_targets = arm_joint_targets.to(self.device)
+
+        robot: Articulation = self.scene["robot"]
+        if joint_names is None:
+            arm_joint_ids, _ = robot.find_joints(["panda_joint.*"], preserve_order=True)
+        else:
+            arm_joint_ids, _ = robot.find_joints(list(joint_names), preserve_order=True)
+        held_arm_joint_velocities = torch.zeros_like(arm_joint_targets)
 
         gripper_action_term = None
         if gripper_raw_action is not None:
@@ -124,6 +221,12 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
                 arm_joint_targets,
                 joint_names=joint_names,
             )
+            if hard_hold_arm:
+                robot.write_joint_state_to_sim(
+                    arm_joint_targets,
+                    held_arm_joint_velocities,
+                    joint_ids=arm_joint_ids,
+                )
             if gripper_action_term is not None:
                 gripper_action_term.apply_actions()
             # self._log_joint_replay_debug("before_scene_write")
