@@ -45,14 +45,15 @@ class ActionsCfg:
         joint_names=["panda_joint.*"],
         body_name="panda_hand",
         controller=DifferentialIKControllerCfg(
-            command_type="pose", use_relative_mode=False, ik_method="dls", ik_params={"dls_lambda": 0.05}
+            command_type="pose", use_relative_mode=False, ik_method="dls", ik_params={"lambda_val": 0.05}
         ),
         body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=FRANKA_GRASP_CENTER_OFFSET),
     )
-    gripper_action: mdp.BinaryJointPositionActionCfg = mdp.BinaryJointPositionActionCfg(
+    gripper_action: mdp.TernaryJointPositionActionCfg = mdp.TernaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=["panda_finger.*"],
         open_command_expr={"panda_finger_.*": 0.04},
+        release_command_expr={"panda_finger_.*": 0.022},
         close_command_expr={"panda_finger_.*": 0.0},
     )
 
@@ -204,10 +205,13 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # general settings
         self.decimation = 5
-        self.episode_length_s = 80.0
+        self.episode_length_s = 20.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
-        self.sim.render_interval = 2
+        self.sim.render.rendering_mode = "balanced"
+        self.sim.render_interval = 10
+        self.sim.render.antialiasing_mode = "DLAA"
+        self.sim.render.enable_dl_denoiser = True
 
         self.sim.physx.bounce_threshold_velocity = 0.2
         self.sim.physx.bounce_threshold_velocity = 0.01
@@ -260,7 +264,6 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # Set settings for camera rendering
         self.rerender_on_reset = True
-        self.sim.render.antialiasing_mode = "Off"  # disable dlss
 
         # List of image observations in policy observations
         self.image_obs_list = ["table_cam", "origin_top_cam", "wrist_cam"]

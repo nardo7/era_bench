@@ -11,6 +11,7 @@ class GripperState:
     """States for the gripper."""
 
     OPEN = wp.constant(1.0)
+    RELEASE = wp.constant(0.0)
     CLOSE = wp.constant(-1.0)
 
 
@@ -99,21 +100,21 @@ def get_state_config(state: int) -> tuple[float, int]:
     if state == ARC_STATE_REST:  # REST
         return 0.05, ARC_STATE_APPROACHING_ABOVE
     elif state == ARC_STATE_APPROACHING_ABOVE:  # APPROACHING_ABOVE
-        return 0.3, ARC_STATE_APPROACHING
+        return 0.1, ARC_STATE_APPROACHING
     elif state == ARC_STATE_APPROACHING:  # APPROACHING
-        return 0.4, ARC_STATE_GRASPING
+        return 0.3, ARC_STATE_GRASPING
     elif state == ARC_STATE_GRASPING:  # GRASPING
-        return 0.4, ARC_STATE_RETREATING_ABOVE
+        return 0.3, ARC_STATE_RETREATING_ABOVE
     elif state == ARC_STATE_RETREATING_ABOVE:  # RETREATING_ABOVE
-        return 0.1, ARC_STATE_APPROACHING_PLACING_ABOVE
+        return 0.05, ARC_STATE_APPROACHING_PLACING_ABOVE
     elif state == ARC_STATE_APPROACHING_PLACING_ABOVE:  # APPROACHING_PLACING_ABOVE
-        return 0.2, ARC_STATE_APPROACHING_PLACING
+        return 0.1, ARC_STATE_APPROACHING_PLACING
     elif state == ARC_STATE_APPROACHING_PLACING:  # APPROACHING_PLACING
-        return 0.5, ARC_STATE_PLACING
+        return 0.3, ARC_STATE_PLACING
     elif state == ARC_STATE_PLACING:  # PLACING
-        return 0.4, ARC_STATE_RETREATING_PLACING_ABOVE
+        return 0.3, ARC_STATE_RETREATING_PLACING_ABOVE
     elif state == ARC_STATE_RETREATING_PLACING_ABOVE:  # RETREATING_PLACING_ABOVE
-        return 0.1, ARC_STATE_REST
+        return 0.05, ARC_STATE_REST
     else:  # RETREATING (state == ARC_STATE_RETREATING)
         return 0.05, ARC_STATE_REST
 
@@ -176,7 +177,12 @@ def arc_state_machine_kernel(
         # pose so that transitions which only change the gripper state do not
         # cause the arm to move toward a previously requested target. This keeps
         # the arm stable when the intent is to only close/open the gripper.
-        if state == ARC_STATE_GRASPING or state == ARC_STATE_PLACING:
+        if (
+            state == ARC_STATE_GRASPING
+            or state == ARC_STATE_PLACING
+            or state == ARC_STATE_RETREATING_ABOVE
+            or state == ARC_STATE_RETREATING_PLACING_ABOVE
+        ):
             retreat_from_position[tid] = ee_pose[tid]
 
     if state == ARC_STATE_PLACING and condition:
@@ -225,11 +231,11 @@ def arc_state_machine_kernel(
         des_ee_pose[tid] = wp.transform_multiply(offset[tid], desired_goal_poses[tid, current_goal_object_idx])
 
     elif state == ARC_STATE_PLACING:
-        des_gripper_state[tid] = GripperState.OPEN
+        des_gripper_state[tid] = GripperState.RELEASE
         des_ee_pose[tid] = retreat_from_position[tid]  # hold position after placing
 
     elif state == ARC_STATE_RETREATING_PLACING_ABOVE:
-        des_gripper_state[tid] = GripperState.OPEN
+        des_gripper_state[tid] = GripperState.RELEASE
         des_ee_pose[tid] = wp.transform_multiply(
             retreat_offset[tid], retreat_from_position[tid]
         )  # lift +0.2m after placing

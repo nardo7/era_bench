@@ -67,6 +67,7 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
     planner_cfg.interpolation_dt = 0.06
     planner_cfg.trajopt_tsteps = 60
     planner_cfg.n_repeat = 10
+    planner_cfg.enable_graph = True
 
     # planner_cfg.debug_planner = False
 

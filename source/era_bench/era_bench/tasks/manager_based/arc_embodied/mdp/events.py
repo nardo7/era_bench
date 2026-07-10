@@ -40,7 +40,7 @@ def init_reserve_cubes_positions(env: EraBenchEnv, env_ids: list[int]):
         env_ids (list[int]): List of environment IDs for which to initialize the reserve cubes.
     """
     scene_cfg = env.cfg.scene
-    x_offsets = [0.60]  # , 0.55]
+    x_offsets = [0.30]  # , 0.55]
     y_offsets = [-0.1, 0.1]
     base_cube_center_height = scene_cfg.cubes_size[2] / 2
     colors = _get_reserve_cube_color_order(env)
@@ -82,14 +82,17 @@ def sample_success_positions(
     dest_poses = (
         torch.tensor(
             [
-                [0.0, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.25, 0.75, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [0.25, 0.75, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                # [0.0, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                # [-0.25, 0.75, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                # [0.25, 0.75, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                # [0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                # [-0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                # [0.0, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                # [-0.25, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                # [0.25, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
                 [0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.25, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [0.25, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [0.19, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [0.25, 0.31, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
             ],
             device=env.device,
         )
@@ -98,7 +101,7 @@ def sample_success_positions(
     )
 
     possible_colors = set(scene_cfg.get_reserve_cube_colors())
-    colors = [scene_cfg.get_reserve_cube_colors()[0]] * dest_poses.shape[1]
+    colors = [scene_cfg.get_reserve_cube_colors()[-1]] * dest_poses.shape[1]
 
     pairs = list(zip(colors, dest_poses.permute(1, 0, 2)))
     dest_poses_by_color: dict[Colors, torch.Tensor] = {}

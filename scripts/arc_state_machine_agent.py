@@ -106,7 +106,7 @@ def execute_plan(
 ) -> tuple[VecEnvObs | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, dict | None, int]:
     gripper_raw_action = target_gripper_pose
     planned_trayectory_poses = planner.get_planned_poses()
-    current_plan = planner.current_plan
+    current_plan = planner.current_plan_with_repeated_end_pose
     obs: VecEnvObs | None = None
     reward: torch.Tensor | None = None
     terminated: torch.Tensor | None = None
@@ -124,11 +124,11 @@ def execute_plan(
     print(f"[INFO]: Trayectory goal planned: {last_action[:3].tolist()} with quaternion {last_action[3:7].tolist()}")
     executed_steps = 0
     plan_joint_positions = cast(torch.Tensor, current_plan.position)
-    repeat_count = planner.n_repeat if planner.n_repeat is not None else 0
-    if repeat_count > 0:
-        final_joint_position = plan_joint_positions[-1:].clone()
-        repeated_joint_positions = final_joint_position.repeat(repeat_count, 1)
-        plan_joint_positions = torch.cat([plan_joint_positions, repeated_joint_positions], dim=0)
+    print(
+        "[INFO]: Executing plan with "
+        f"{plan_joint_positions.shape[0]} waypoints "
+        f"(including planner-configured settling repeats)."
+    )
     if current_plan.joint_names is None:
         raise ValueError("Expected current CuRobo plan to include joint names.")
     plan_joint_names = list(current_plan.joint_names)
@@ -141,6 +141,7 @@ def execute_plan(
         executed_steps += 1
         if terminated is not None and truncated is not None and (terminated | truncated).any():
             return obs, reward, terminated, truncated, info, executed_steps
+
     print("[INFO]: Completed execution of planned trajectory in {} steps.".format(executed_steps))
     return obs, reward, terminated, truncated, info, executed_steps
 
@@ -192,7 +193,7 @@ def main():
 
     # desired object orientation (we only do position control of object)
 
-    desired_poses_amount = env.success_positions[Colors.BLUE][0].shape[0]
+    desired_poses_amount = env.success_positions[Colors.RED][0].shape[0]
     desired_orientation = torch.zeros((env.num_envs, desired_poses_amount, 4), device=env.device)
     desired_orientation[:, :, 1] = 1.0
     reserve_cube_stacks = env.get_reserve_cubes_poses_by_color()

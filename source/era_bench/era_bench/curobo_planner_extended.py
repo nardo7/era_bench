@@ -1,7 +1,5 @@
 """Extended cuRobo planner with plan_goalset support."""
 
-from datetime import datetime, timezone
-import json
 from pathlib import Path
 from typing import Iterable, cast
 
@@ -21,8 +19,10 @@ class ExtendedCuroboPlanner(CuroboPlanner):
     """
 
     _MAX_TASK_TRAJECTORY_DISTANCE = torch.linalg.vector_norm(
-        torch.tensor([0.6, -0.1, 0.23]) - torch.tensor([-0.33, 0.73, 0.025])
+        torch.tensor([0.8, -0.1, 0.23]) - torch.tensor([-0.25, 0.75, 0.1])
     )
+    _SHORT_PATH_DISTANCE = 0.16
+    _MAX_ADDITIONAL_CONTACT_WINDOW = 0.1
     _PHASE_LOG_FILENAME = "curobo_phase_debug.jsonl"
 
     def __init__(
@@ -47,6 +47,51 @@ class ExtendedCuroboPlanner(CuroboPlanner):
 
     def set_expected_attached_object(self, object_name: str | None) -> None:
         self._expected_attached_object = object_name
+
+    @property
+    def current_plan_with_repeated_end_pose(self) -> JointState | None:
+        """Current cuRobo plan with the configured repeated terminal waypoint appended."""
+        return self._plan_with_repeated_terminal_waypoint(self._current_plan)
+
+    def _plan_component_as_tensor(self, component: torch.Tensor | list[float] | None) -> torch.Tensor | None:
+        if component is None:
+            return None
+        if isinstance(component, torch.Tensor):
+            return component
+        return torch.as_tensor(component, device=self.tensor_args.device, dtype=self.tensor_args.dtype)
+
+    def _plan_with_repeated_terminal_waypoint(self, plan: JointState | None) -> JointState | None:
+        if plan is None or plan.position is None or len(plan.position) == 0:
+            return plan
+
+        repeat_count = self.n_repeat if self.n_repeat is not None else 0
+        if repeat_count <= 0:
+            return plan
+
+        position = self._plan_component_as_tensor(plan.position)
+        if position is None or position.shape[0] == 0:
+            return plan
+        velocity = self._plan_component_as_tensor(plan.velocity)
+        acceleration = self._plan_component_as_tensor(plan.acceleration)
+
+        final_joint_position = position[-1:].clone()
+        repeated_joint_positions = final_joint_position.repeat(repeat_count, 1)
+        repeated_plan = JointState(
+            position=torch.cat([position, repeated_joint_positions], dim=0),
+            velocity=(
+                torch.cat([velocity, velocity[-1:].clone().repeat(repeat_count, 1)], dim=0)
+                if velocity is not None
+                else None
+            ),
+            acceleration=(
+                torch.cat([acceleration, acceleration[-1:].clone().repeat(repeat_count, 1)], dim=0)
+                if acceleration is not None
+                else None
+            ),
+            joint_names=plan.joint_names,
+            tensor_args=getattr(plan, "tensor_args", self.tensor_args),
+        )
+        return repeated_plan
 
     def grasp_center_pose_to_panda_hand_pose(self, target_pose: torch.Tensor) -> torch.Tensor:
         """Convert a grasp-center goal pose into the corresponding panda_hand goal pose."""
@@ -106,7 +151,7 @@ class ExtendedCuroboPlanner(CuroboPlanner):
         self,
         grasp_center_goal: torch.Tensor,
         num_candidates: int = 8,
-        contact_window_fraction: float | None = 0.15,
+        contact_window_fraction: float | None = 0.1,
     ) -> bool:
         """Plan to a grasp-center goal by converting it to the panda_hand frame expected by cuRobo."""
         planner_pose = self.grasp_center_pose_to_panda_hand_pose(grasp_center_goal.unsqueeze(0))[0]
@@ -123,7 +168,7 @@ class ExtendedCuroboPlanner(CuroboPlanner):
         target_position: torch.Tensor,
         base_quat: torch.Tensor,
         num_candidates: int = 8,
-        contact_window_fraction: float | None = 0.15,
+        contact_window_fraction: float | None = 0.1,
     ) -> bool:
         """Try a fixed set of wrist-yaw variants and keep the first feasible plan."""
         candidate_poses = self._generate_yaw_candidates(
@@ -288,12 +333,20 @@ class ExtendedCuroboPlanner(CuroboPlanner):
             raise ValueError(f"contact_window_fraction must be in (0.0, 0.5), got {contact_window_fraction}")
 
         start_pose = self.get_ee_pose(start_state)
-        entry_pose = self._interpolate_pose(start_pose, goal_pose, contact_window_fraction)
-        exit_pose = self._interpolate_pose(start_pose, goal_pose, 1.0 - contact_window_fraction)
+        adaptive_contact_window_fraction = self._adaptive_contact_window_fraction(
+            start_pose=start_pose,
+            goal_pose=goal_pose,
+            base_contact_window_fraction=contact_window_fraction,
+        )
+        print(
+            f"[INFO]: _plan_to_contact_with_window: adaptive_contact_window_fraction={adaptive_contact_window_fraction:.4f}"
+        )
+        entry_pose = self._interpolate_pose(start_pose, goal_pose, adaptive_contact_window_fraction)
+        exit_pose = self._interpolate_pose(start_pose, goal_pose, 1.0 - adaptive_contact_window_fraction)
         entry_steps, middle_steps, exit_steps = self._phase_step_budget(
             start_pose=start_pose,
             goal_pose=goal_pose,
-            contact_window_fraction=contact_window_fraction,
+            contact_window_fraction=adaptive_contact_window_fraction,
         )
         # self._log_phase_calculation(
         #     phase="budget",
@@ -414,6 +467,27 @@ class ExtendedCuroboPlanner(CuroboPlanner):
         span_ratio = min(max(distance / max_distance, 0.0), 1.0)
         scaled_steps = min_total_steps + int(round((max_total_steps - min_total_steps) * span_ratio))
         return min(max(scaled_steps, min_total_steps), max_total_steps)
+
+    def _adaptive_contact_window_fraction(
+        self,
+        start_pose: Pose,
+        goal_pose: Pose,
+        base_contact_window_fraction: float,
+    ) -> float:
+        """Increase the contact-allowed window for short paths and taper it for longer ones."""
+        path_distance = self._cartesian_distance(start_pose, goal_pose)
+        short_path_distance = self._SHORT_PATH_DISTANCE
+        max_distance = float(self._MAX_TASK_TRAJECTORY_DISTANCE.item())
+
+        if path_distance <= short_path_distance:
+            additional_contact_window = self._MAX_ADDITIONAL_CONTACT_WINDOW
+        elif max_distance <= short_path_distance:
+            additional_contact_window = 0.0
+        else:
+            distance_ratio = (max_distance - path_distance) / (max_distance - short_path_distance)
+            additional_contact_window = self._MAX_ADDITIONAL_CONTACT_WINDOW * min(max(distance_ratio, 0.0), 1.0)
+
+        return min(base_contact_window_fraction + additional_contact_window, 0.49)
 
     # def _log_phase_calculation(self, phase: str, success: bool, contact: bool, **extra_fields) -> None:
     #     """Append one phase event to a local JSONL debug file."""

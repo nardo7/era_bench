@@ -75,7 +75,7 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
         joint_names: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         robot: Articulation = self.scene["robot"]
-        self._log_joint_replay_debug("before_apply_joint_targets")
+        # self._log_joint_replay_debug("before_apply_joint_targets")
         if joint_names is None:
             arm_joint_ids, _ = robot.find_joints(["panda_joint.*"], preserve_order=True)
         else:
@@ -84,7 +84,7 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
         arm_joint_targets = arm_joint_targets.to(self.device)
         robot.set_joint_position_target(arm_joint_targets, joint_ids=arm_joint_ids)
 
-        self._log_joint_replay_debug("after_apply_joint_targets")
+        # self._log_joint_replay_debug("after_apply_joint_targets")
 
     def step_joint_targets(
         self,
@@ -126,14 +126,14 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
             )
             if gripper_action_term is not None:
                 gripper_action_term.apply_actions()
-            self._log_joint_replay_debug("before_scene_write")
+            # self._log_joint_replay_debug("before_scene_write")
             self.scene.write_data_to_sim()
             self.sim.step(render=False)
             self.recorder_manager.record_post_physics_decimation_step()
             if self._sim_step_counter % self.cfg.sim.render_interval == 0 and is_rendering:
                 self.sim.render()
             self.scene.update(dt=self.physics_dt)
-            self._log_joint_replay_debug("after_scene_update")
+            # self._log_joint_replay_debug("after_scene_update")
 
         self.episode_length_buf += 1
         self.common_step_counter += 1
@@ -143,7 +143,7 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
         self.reward_buf = self.reward_manager.compute(dt=self.step_dt)
 
         if len(self.recorder_manager.active_terms) > 0:
-            self.obs_buf = self.observation_manager.compute()
+            self.obs_buf = self.observation_manager.compute(update_history=True)
             self.recorder_manager.record_post_step()
 
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -162,7 +162,8 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
         if "interval" in self.event_manager.available_modes:
             self.event_manager.apply(mode="interval", dt=self.step_dt)
 
-        self.obs_buf = self.observation_manager.compute(update_history=True)
+        if len(self.recorder_manager.active_terms) == 0:
+            self.obs_buf = self.observation_manager.compute(update_history=True)
 
         return self.obs_buf, self.reward_buf, self.reset_terminated, self.reset_time_outs, self.extras
 

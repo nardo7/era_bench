@@ -35,15 +35,15 @@ class EpisodeVideoRecorder(RecorderTerm):
         self._sensor_name = cfg.sensor_name
         self._fps = cfg.fps
 
-        # per-env frame buffer (numpy array, lazily allocated) and episode counter
-        self._buffers: dict[int, np.ndarray | None] = {i: None for i in range(env.num_envs)}
+        # Per-env frame buffers store one array per frame and are stacked only once at encode time.
+        self._buffers: dict[int, list[np.ndarray]] = {i: [] for i in range(env.num_envs)}
         self._ep_counts: dict[int, int] = {i: 0 for i in range(env.num_envs)}
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         if env_ids is None:
             env_ids = range(self._env.num_envs)
         for env_id in env_ids:
-            self._buffers[env_id] = None
+            self._buffers[env_id].clear()
 
     def record_pre_step(self):
         """Buffer one raw uint8 RGB frame per env directly from the camera sensor.
@@ -58,12 +58,7 @@ class EpisodeVideoRecorder(RecorderTerm):
         # TiledCamera output is uint8 RGBA or RGB, shape (N, H, W, C)
         frames = sensor.data.output["rgb"].cpu().numpy()  # uint8, no normalization
         for env_id in range(self._env.num_envs):
-            frame = frames[env_id][np.newaxis]  # (1, H, W, C)
-            existing = self._buffers[env_id]
-            if existing is None:
-                self._buffers[env_id] = frame
-            else:
-                self._buffers[env_id] = np.concatenate([existing, frame], axis=0)
+            self._buffers[env_id].append(np.array(frames[env_id], copy=True))
 
         return None, None  # nothing to store in HDF5 at this point
 
@@ -85,15 +80,16 @@ class EpisodeVideoRecorder(RecorderTerm):
         any_valid = False
 
         for env_id in env_ids:
-            frames_np = self._buffers[env_id]  # (T, H, W, C) or None
+            frames_buffer = self._buffers[env_id]
 
-            if frames_np is None:
+            if len(frames_buffer) == 0:
                 # No frames yet for this env (very first reset); store an empty placeholder
                 # so the index alignment with env_ids is preserved.
                 video_list.append(torch.zeros(0, dtype=torch.uint8))
                 continue
 
             any_valid = True
+            frames_np = np.stack(frames_buffer, axis=0)
 
             # float [0,1] -> uint8
             if frames_np.dtype != np.uint8:
@@ -116,7 +112,7 @@ class EpisodeVideoRecorder(RecorderTerm):
             )
 
             self._ep_counts[env_id] += 1
-            self._buffers[env_id] = None
+            frames_buffer.clear()
             video_list.append(torch.from_numpy(mp4_bytes))
 
         if not any_valid:

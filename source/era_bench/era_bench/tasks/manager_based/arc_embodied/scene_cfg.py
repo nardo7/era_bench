@@ -4,10 +4,10 @@ from isaaclab.utils import configclass
 from isaaclab.scene import InteractiveSceneCfg
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
-from isaaclab.sensors import CameraCfg
+from isaaclab.sensors import TiledCameraCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
-from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG  # isort: skip
+from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG, FRANKA_PANDA_CFG  # isort: skip
 from .config import DEFAULT_COLORS, Colors
 import torch
 
@@ -26,43 +26,45 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     # robots: will be populated by agent env cfg
     robot: ArticulationCfg = FRANKA_PANDA_HIGH_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")  # type: ignore
 
-    wrist_cam = CameraCfg(
+    wrist_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/panda_hand/wrist_cam",
         update_period=0.0,
         height=84,
         width=84,
-        data_types=["rgb", "distance_to_image_plane"],
+        data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 2)
         ),
-        offset=CameraCfg.OffsetCfg(
+        offset=TiledCameraCfg.OffsetCfg(
             pos=(0.13, 0.0, -0.15), rot=(-0.70614, 0.03701, 0.03701, -0.70614), convention="ros"
         ),
     )
 
-    table_cam = CameraCfg(
+    table_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/table_cam",
         update_period=0.0,
         height=256,
         width=384,
-        data_types=["rgb", "distance_to_image_plane"],
+        data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=18.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 5.0)
         ),
-        offset=CameraCfg.OffsetCfg(pos=(1.8, 0.0, 0.7), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"),
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(1.8, 0.0, 0.7), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"
+        ),
         # offset=CameraCfg.OffsetCfg(pos=(1.8, 0.0, 1.7), rot=(0.24184, -0.66446, -0.66446, 0.24184), convention="ros"),
     )
 
-    origin_top_cam = CameraCfg(
+    origin_top_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/origin_top_cam",
         update_period=0.0,
         height=384,
         width=384,
-        data_types=["rgb", "distance_to_image_plane"],
+        data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=20.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 5.0)
         ),
-        offset=CameraCfg.OffsetCfg(pos=(0.2, 0.0, 2.4), rot=(0.0, 0.70711, 0.70711, 0.0), convention="ros"),
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.2, 0.0, 2.4), rot=(0.0, 0.70711, 0.70711, 0.0), convention="ros"),
     )
 
     # end-effector sensor: will be populated by agent env cfg
