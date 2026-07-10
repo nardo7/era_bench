@@ -239,6 +239,14 @@ def main():
     start = time.time()
     print(f"[INFO]: Arc IK recovery log file: {place_above_recovery.log_path}")
     recovery_active_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    robot = env.scene["robot"]
+    arm_joint_ids, arm_joint_names = robot.find_joints(["panda_joint.*"], preserve_order=True)
+    contact_hold_states = {
+        ArcStates.GRASPING.python_value,
+        ArcStates.PLACING.python_value,
+    }
+    holding_contact_state = False
+    held_arm_joint_targets: torch.Tensor | None = None
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
@@ -303,11 +311,34 @@ def main():
                     next_pose[0, :7], contact_window_fraction=0.1
                 )
 
-            if not plan_success:
+            contact_hold_active = int(arc_state[0].item()) in contact_hold_states
+            if contact_hold_active:
+                # Do not re-solve differential IK while a gripper contact is being
+                # created or released. DiffIK computes a new joint target from the
+                # current pose every step, so contact forces can otherwise move the
+                # arm along its unconstrained elbow/null-space direction.
+                if not holding_contact_state:
+                    held_arm_joint_targets = robot.data.joint_pos[:, arm_joint_ids].clone()
+                    holding_contact_state = True
+                    print("[INFO]: Holding arm joint targets during gripper contact transition.")
+
+                if held_arm_joint_targets is None:
+                    raise RuntimeError("Missing arm joint targets for contact hold.")
+                obs, reward, terminated, truncated, info = env.step_joint_targets(
+                    held_arm_joint_targets,
+                    joint_names=arm_joint_names,
+                    gripper_raw_action=recovery_update.command[:, -1],
+                )
+                state_steps = 1
+            else:
+                holding_contact_state = False
+                held_arm_joint_targets = None
+
+            if not contact_hold_active and not plan_success:
                 print("[WARNING]: Skipping execution for this state-machine step with CUROBO. trying with plain IK.")
                 obs, reward, terminated, truncated, info = env.step(recovery_update.command)
                 state_steps = 1
-            else:
+            elif not contact_hold_active:
                 obs, reward, terminated, truncated, info, state_steps = execute_plan(
                     env, planner, recovery_update.command[0, -1]
                 )
