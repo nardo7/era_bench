@@ -8,16 +8,10 @@ from isaaclab.sensors import TiledCameraCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG, FRANKA_PANDA_CFG  # isort: skip
-from .config import DEFAULT_COLORS, Colors
+from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, DEFAULT_COLORS, Colors
 import torch
 
 FRANKA_GRASP_CENTER_OFFSET = (0.0, 0.0, 0.1034)
-COLOR_RGB = {
-    Colors.RED: (0.35, 0.0, 0.0),
-    Colors.BLUE: (0.0, 0.08, 0.3),
-    Colors.GREEN: (0.0, 0.22, 0.08),
-    Colors.YELLOW: (0.38, 0.3, 0.0),
-}
 
 
 @configclass
@@ -124,6 +118,11 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         return sorted(k for k in self.__dict__ if k.startswith("reserve_cube_"))
 
     @property
+    def input_grid_cubes(self) -> list[str]:
+        """Names of the pooled, static cubes used to display an ARC input grid."""
+        return sorted(k for k in self.__dict__ if k.startswith("input_grid_cube_"))
+
+    @property
     def colors_amount(self) -> int:
         """Number of colors used for cubes in this scene config."""
         return 2
@@ -148,6 +147,29 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         """Number of reserve cubes used per line in this scene config."""
         return 3
 
+    @property
+    def input_grid_cubes_amount_per_color(self) -> int:
+        """Default number of pooled reference cubes for each ARC colour."""
+        return 32
+
+    @property
+    def input_grid_blue_cubes_amount(self) -> int:
+        """Number of pooled reference cubes reserved for ARC blue (colour ID 1)."""
+        return 45
+
+    @property
+    def input_grid_center_local(self) -> tuple[float, float, float]:
+        """Local position of the center of the input grid in this scene config."""
+        return (0.0, -0.5, 0.00)  # (x, y, z) in meters
+
+    def get_input_grid_cubes_amount(self, arc_color: int) -> int:
+        """Return the number of pooled input-grid cubes available for an ARC colour ID."""
+        if arc_color not in ARC_COLOR_TO_COLOR:
+            raise ValueError(f"Unsupported ARC colour ID: {arc_color}")
+        if ARC_COLOR_TO_COLOR[arc_color] is Colors.BLUE:
+            return self.input_grid_blue_cubes_amount
+        return self.input_grid_cubes_amount_per_color
+
     def _cube_visual_material(self, color: Colors) -> sim_utils.PreviewSurfaceCfg:
         return sim_utils.PreviewSurfaceCfg(diffuse_color=COLOR_RGB[color])
 
@@ -165,9 +187,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
             cube_cfg.spawn.visual_material = self._cube_visual_material(colors[color_idx])
 
     def initialize_reserve_cubes(self, colors: list[Colors] = DEFAULT_COLORS) -> None:
-        # x_offsets = [0.60]  # , 0.55]
-        # y_offsets = [-0.1, 0.1]
-        # base_cube_center_height = self.cubes_size[2] * 0.5
+
         reserve_cube_rigid_props = sim_utils.RigidBodyPropertiesCfg(
             solver_position_iteration_count=16,
             solver_velocity_iteration_count=4,
@@ -186,26 +206,12 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         # init reserve cubes
         for color_idx in range(self.colors_amount):
             for i in range(self.reserve_cubes_amount_per_color):
-                # offset_x = x_offsets[int(color_idx / 2)]
-                # offset_y = y_offsets[color_idx % 2]
-                # x = offset_x + (i % self.reserve_cubes_amount_per_line) * (
-                #     self.cubes_size[0] + self.separation_distance
-                # )
-                # y = offset_y
                 cube_name = f"reserve_cube_{colors[color_idx].value}_{i+1}"
                 setattr(
                     self,
                     cube_name,
                     RigidObjectCfg(
                         prim_path="{ENV_REGEX_NS}/" + cube_name,
-                        # init_state=RigidObjectCfg.InitialStateCfg(
-                        #     pos=(
-                        #         x,
-                        #         y,
-                        #         base_cube_center_height
-                        #         + ((i // self.reserve_cubes_amount_per_line) * self.cubes_size[2]),
-                        #     )
-                        # ),
                         spawn=sim_utils.CuboidCfg(
                             size=self.cubes_size,
                             semantic_tags=[("class", cube_name)],
@@ -213,6 +219,30 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                             collision_props=reserve_cube_collision_props,
                             mass_props=reserve_cube_mass_props,
                             visual_material=self._cube_visual_material(colors[color_idx]),
+                        ),
+                    ),
+                )
+
+    def initialize_input_grid_cubes(self) -> None:
+        """Create a static, reset-reusable pool for all possible ARC input pixels."""
+        input_cube_rigid_props = sim_utils.RigidBodyPropertiesCfg(
+            kinematic_enabled=True,
+            disable_gravity=True,
+        )
+
+        for arc_color, color in ARC_COLOR_TO_COLOR.items():
+            for i in range(self.get_input_grid_cubes_amount(arc_color)):
+                cube_name = self.get_input_grid_cube_name(arc_color, i)
+                setattr(
+                    self,
+                    cube_name,
+                    RigidObjectCfg(
+                        prim_path="{ENV_REGEX_NS}/" + cube_name,
+                        spawn=sim_utils.CuboidCfg(
+                            size=self.cubes_size,
+                            semantic_tags=[("class", cube_name)],
+                            rigid_props=input_cube_rigid_props,
+                            visual_material=self._cube_visual_material(color),
                         ),
                     ),
                 )
@@ -254,6 +284,17 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         """Get the name of a reserve cube given its color and index."""
         return f"reserve_cube_{color.value}_{index+1}"
 
+    def get_input_grid_cube_name(self, arc_color: int, index: int) -> str:
+        """Return the pooled input-cube name for an ARC colour ID and zero-based slot."""
+        if arc_color not in ARC_COLOR_TO_COLOR:
+            raise ValueError(f"Unsupported ARC colour ID: {arc_color}")
+        pool_size = self.get_input_grid_cubes_amount(arc_color)
+        if not 0 <= index < pool_size:
+            raise ValueError(
+                f"Input-grid cube index {index} exceeds the pool size " f"({pool_size}) for ARC colour {arc_color}."
+            )
+        return f"input_grid_cube_{ARC_COLOR_TO_COLOR[arc_color].value}_{index+1}"
+
     def get_reserve_cube_color(self, cube_name: str) -> Colors:
         """Get the color of a reserve cube given its name."""
         parts = cube_name.split("_")
@@ -262,5 +303,5 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         return Colors(parts[2])
 
     def __post_init__(self):
-        # return
         self.initialize_reserve_cubes()
+        self.initialize_input_grid_cubes()

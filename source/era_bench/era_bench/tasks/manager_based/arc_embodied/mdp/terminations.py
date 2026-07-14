@@ -9,6 +9,8 @@ from isaaclab.assets import RigidObject
 from isaaclab.managers import ManagerTermBase
 from isaaclab.sensors import FrameTransformer
 from ...common.utils import line_direction_xy_from_quat
+from .commands import LoadTaskCommand
+from isaaclab.envs.mdp import time_out as isaaclab_time_out
 
 if TYPE_CHECKING:
     from era_bench.tasks.manager_based.arc_embodied.era_bench_env import EraBenchEnv
@@ -69,6 +71,21 @@ def _targets_to_padded_env_major(
         if target_dev.shape[0] > 0:
             padded[env_id, : target_dev.shape[0]] = target_dev[..., :3]
     return padded, counts
+
+
+def time_out(env: EraBenchEnv) -> torch.Tensor:
+    """Terminate timed-out episodes and mark their current tasks as failed."""
+    timed_out = isaaclab_time_out(env)
+
+    if torch.any(timed_out):
+        load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
+        for env_id in timed_out.nonzero(as_tuple=False).flatten().tolist():
+            print(
+                f"[INFO]: Environment {env_id} timed out. Marking current task '{load_task_command.current_tasks[env_id]}' as failed."
+            )
+            load_task_command.set_task_failed(env_id)
+
+    return timed_out
 
 
 class no_progress(ManagerTermBase):
@@ -149,7 +166,17 @@ class no_progress(ManagerTermBase):
         self._prev_ee_quat.copy_(ee_quat)
 
         active = comparable & (self._step_count > self._warmup_steps)
-        return active & (self._stagnant_steps >= self._patience)
+        stalled = active & (self._stagnant_steps >= self._patience)
+
+        if torch.any(stalled):
+            load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
+            for env_id in stalled.nonzero(as_tuple=False).flatten().tolist():
+                print(
+                    f"[INFO]: Environment {env_id} has not made progress for {self._stagnant_steps[env_id].item()} steps. Marking current task '{load_task_command.current_tasks[env_id]}' as failed."
+                )
+                load_task_command.set_task_failed(env_id)
+
+        return stalled
 
 
 def are_objects_in_success_positions(
@@ -220,6 +247,11 @@ def are_objects_in_success_positions(
         tcp_to_targets_min = torch.min(tcp_to_targets, dim=2).values.squeeze(1)
         is_tcp_far_enough = tcp_to_targets_min > 0.05
         success_mask &= is_tcp_far_enough
+
+    if torch.any(success_mask):
+        load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
+        for env_id in success_mask.nonzero(as_tuple=False).flatten().tolist():
+            load_task_command.set_task_completed(env_id)
 
     return success_mask
 

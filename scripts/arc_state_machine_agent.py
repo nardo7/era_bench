@@ -53,7 +53,7 @@ from era_bench.tasks.manager_based.arc_embodied.ik_watchdog import ArcIKWatchdog
 from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
 from era_bench.tasks.manager_based.arc_embodied.era_bench_env import EraBenchEnv
 from era_bench.tasks.manager_based.common.geometry_utils import rigid_object_world_size_meters
-from era_bench.tasks.manager_based.arc_embodied.config import Colors
+from arc_utils import Colors
 import era_bench.tasks  # noqa: F401
 import random
 

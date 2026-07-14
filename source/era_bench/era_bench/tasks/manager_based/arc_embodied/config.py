@@ -1,11 +1,8 @@
-from enum import Enum
+"""Compatibility imports for ARC colour definitions.
 
+New code should import these definitions directly from :mod:`arc_utils`.
+"""
 
-class Colors(Enum):
-    RED = "red"
-    BLUE = "blue"
-    GREEN = "green"
-    YELLOW = "yellow"
+from arc_utils import DEFAULT_COLORS, Colors
 
-
-DEFAULT_COLORS = [Colors.RED, Colors.BLUE, Colors.GREEN, Colors.YELLOW]
+__all__ = ["Colors", "DEFAULT_COLORS"]

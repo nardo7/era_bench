@@ -4,7 +4,7 @@ from typing import TypeGuard, cast
 
 import warp as wp
 import torch
-from .config import Colors as ArcColors
+from arc_utils import Colors as ArcColors
 
 
 class GripperState:

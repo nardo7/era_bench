@@ -53,7 +53,7 @@ class ActionsCfg:
         asset_name="robot",
         joint_names=["panda_finger.*"],
         open_command_expr={"panda_finger_.*": 0.04},
-        release_command_expr={"panda_finger_.*": 0.022},
+        release_command_expr={"panda_finger_.*": 0.021},
         close_command_expr={"panda_finger_.*": 0.0},
     )
 
@@ -123,6 +123,8 @@ class EventCfg:
 
     # line_name: str = "line"
 
+    prepare_task_command = EventTerm(func=mdp.prepare_task_command, mode="reset")
+
     init_franka_arm_pose = EventTerm(
         func=mdp.set_default_joint_pose,
         mode="reset",
@@ -155,6 +157,18 @@ class EventCfg:
 
     sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
 
+    setup_task_grid = EventTerm(func=mdp.setup_task_grid, mode="reset")
+
+
+@configclass
+class CommandsCfg:
+    """Commands for the MDP."""
+
+    load_task = mdp.LoadTaskCommandCfg(
+        class_type=mdp.LoadTaskCommand,
+        retries=0,
+    )
+
 
 @configclass
 class RewardsCfg:
@@ -177,9 +191,7 @@ class TerminationsCfg:
         },
     )
 
-    success = DoneTerm(
-        func=mdp.are_objects_in_success_positions,
-    )
+    success = DoneTerm(func=mdp.are_objects_in_success_positions, params={"distance_threshold": 0.015})
 
 
 ##
@@ -198,6 +210,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
     # MDP settings
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
+    commands: CommandsCfg = CommandsCfg()
 
     # Post initialization
     def __post_init__(self) -> None:
@@ -205,7 +218,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # general settings
         self.decimation = 5
-        self.episode_length_s = 20.0
+        self.episode_length_s = 5.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render.rendering_mode = "balanced"

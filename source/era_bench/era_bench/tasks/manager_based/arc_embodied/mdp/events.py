@@ -7,10 +7,11 @@
 from __future__ import annotations
 
 import torch
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from era_bench.tasks.manager_based.arc_embodied.config import Colors
+from arc_utils import Colors
 
+from era_bench.tasks.manager_based.arc_embodied.mdp.commands import LoadTaskCommand
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
@@ -26,6 +27,12 @@ def _get_reserve_cube_color_order(env: EraBenchEnv) -> list[Colors]:
         list(set(env.cfg.scene.get_reserve_cube_colors())),
         key=lambda c: env.cfg.scene.get_reserve_cube_colors().index(c),
     )
+
+
+def prepare_task_command(env: EraBenchEnv, env_ids: list[int] | torch.Tensor) -> None:
+    """Advance the task command before later reset events read its grid features."""
+    load_task_command: LoadTaskCommand = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
+    load_task_command.prepare_reset(env_ids)
 
 
 def init_reserve_cubes_positions(env: EraBenchEnv, env_ids: list[int]):
@@ -56,20 +63,82 @@ def init_reserve_cubes_positions(env: EraBenchEnv, env_ids: list[int]):
             y = offset_y
             z = base_cube_center_height + (i // scene_cfg.reserve_cubes_amount_per_line) * scene_cfg.cubes_size[2]
             cube_asset: RigidObject = env.scene[cube_name]
+
+            position = torch.tensor([x, y, z], device=env.device).unsqueeze(0).repeat(len(env_ids), 1)
+            position += env.scene.env_origins[env_ids]
+
             cube_asset.write_root_pose_to_sim(
                 torch.cat(
                     [
-                        torch.tensor([x, y, z], device=env.device),
-                        torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device),
+                        position,
+                        torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device).unsqueeze(0).repeat(len(env_ids), 1),
                     ],
                     dim=-1,
-                ).repeat(len(env_ids), 1),
+                ),
                 env_ids=env_ids,
             )
             cube_asset.write_root_velocity_to_sim(
                 torch.zeros((1, 6), device=env.device),
                 env_ids=env_ids,
             )
+
+
+def _reset_input_grid_cubes(env: EraBenchEnv, env_ids_tensor: torch.Tensor):
+
+    scene_cfg = env.cfg.scene
+    # Kinematic reference cubes are hidden below the ground plane before a task
+    # activates the slots it needs. This replaces deleting and respawning prims.
+    hidden_pose = torch.tensor([0.0, 0.0, -10.0, 1.0, 0.0, 0.0, 0.0], device=env.device).repeat(
+        env_ids_tensor.numel(), 1
+    )
+    hidden_pose[:, :3] += env.scene.env_origins[env_ids_tensor]
+    zero_velocity = torch.zeros((env_ids_tensor.numel(), 6), device=env.device)
+
+    for cube_name in scene_cfg.input_grid_cubes:
+        cube_asset: RigidObject = env.scene[cube_name]
+        cube_asset.write_root_pose_to_sim(hidden_pose, env_ids=env_ids_tensor)  # pyright: ignore[reportArgumentType]
+        cube_asset.write_root_velocity_to_sim(
+            zero_velocity, env_ids=env_ids_tensor  # pyright: ignore[reportArgumentType]
+        )
+
+
+def _setup_input_grid(env: EraBenchEnv, env_id: int, input_grid_cubes: torch.Tensor) -> None:
+    """Clear and repopulate the static input-grid cube pool for reset environments."""
+    scene_cfg = env.cfg.scene
+
+    next_slot_by_color: dict[int, int] = {}
+
+    for x, y, color in input_grid_cubes.tolist():
+        arc_color = int(color)
+        slot = next_slot_by_color.get(arc_color, 0)
+        next_slot_by_color[arc_color] = slot + 1
+        cube_name = scene_cfg.get_input_grid_cube_name(arc_color, slot)
+        cube_asset: RigidObject = env.scene[cube_name]
+
+        root_pose = torch.tensor(
+            [x, y, scene_cfg.cubes_size[2] * 0.5, 1.0, 0.0, 0.0, 0.0],
+            device=env.device,
+        ).unsqueeze(0)
+        root_pose[:, :3] += env.scene.env_origins[env_id] + torch.tensor(
+            list(env.cfg.scene.input_grid_center_local), device=env.device
+        )
+        env_id_tensor = torch.tensor([env_id], device=env.device, dtype=torch.long)
+        cube_asset.write_root_pose_to_sim(root_pose, env_ids=env_id_tensor)  # pyright: ignore[reportArgumentType]
+        cube_asset.write_root_velocity_to_sim(
+            torch.zeros((1, 6), device=env.device), env_ids=env_id_tensor  # pyright: ignore[reportArgumentType]
+        )
+
+
+def setup_task_grid(env: EraBenchEnv, env_ids: list[int]):
+    load_task_command: LoadTaskCommand = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
+    env_ids_tensor = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
+    if env_ids_tensor.numel() == 0:
+        return
+
+    _reset_input_grid_cubes(env, env_ids_tensor)
+    for env_id in env_ids:
+        input_grid_cubes, _ = load_task_command.get_features(env_id)
+        _setup_input_grid(env, env_id, input_grid_cubes)
 
 
 def sample_success_positions(
@@ -90,9 +159,14 @@ def sample_success_positions(
                 # [0.0, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
                 # [-0.25, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
                 # [0.25, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [0.19, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [0.25, 0.31, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.19, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.25, 0.31, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.25, 0.37, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.25, 0.43, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.19, 0.43, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.19, 0.37, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
+                [-0.19, 0.31, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
             ],
             device=env.device,
         )

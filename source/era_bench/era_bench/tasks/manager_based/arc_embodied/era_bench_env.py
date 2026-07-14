@@ -4,7 +4,7 @@ from typing import Any, cast
 from torch import Tensor
 import torch
 
-from era_bench.tasks.manager_based.arc_embodied.config import Colors
+from arc_utils import Colors
 from isaaclab.envs import ManagerBasedRLMimicEnv
 from .era_bench_env_cfg import EraBenchEnvCfg
 from isaaclab.managers import SceneEntityCfg
@@ -222,6 +222,7 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
                 joint_names=joint_names,
             )
             if hard_hold_arm:
+                # robot.set_joint_velocity_target(held_arm_joint_velocities, joint_ids=arm_joint_ids)
                 robot.write_joint_state_to_sim(
                     arm_joint_targets,
                     held_arm_joint_velocities,

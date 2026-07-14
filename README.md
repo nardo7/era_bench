@@ -19,11 +19,22 @@ It allows you to develop in an isolated environment, outside of the core Isaac L
 
 - Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
 
+  ```bash
+  git clone --recurse-submodules <REPOSITORY_URL>
+  ```
+
+  For an existing clone, initialize the ARC utilities dependency with:
+
+  ```bash
+  git submodule update --init --recursive
+  ```
+
 - Using a python interpreter that has Isaac Lab installed, install the library in editable mode using:
 
     ```bash
     # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
     python -m pip install -e source/era_bench
+    ```
 
 - Verify that the extension is correctly installed by:
 
