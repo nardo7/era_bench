@@ -162,6 +162,11 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         """Local position of the center of the input grid in this scene config."""
         return (0.0, -0.5, 0.00)  # (x, y, z) in meters
 
+    @property
+    def output_grid_center_local(self) -> tuple[float, float, float]:
+        """Local position of the center of the output grid in this scene config."""
+        return (0.0, 0.5, 0.00)  # (x, y, z) in meters
+
     def get_input_grid_cubes_amount(self, arc_color: int) -> int:
         """Return the number of pooled input-grid cubes available for an ARC colour ID."""
         if arc_color not in ARC_COLOR_TO_COLOR:
@@ -242,6 +247,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                             size=self.cubes_size,
                             semantic_tags=[("class", cube_name)],
                             rigid_props=input_cube_rigid_props,
+                            # No collision_props: input cubes are visual references only.
                             visual_material=self._cube_visual_material(color),
                         ),
                     ),

@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Script to run an environment with zero action agent."""
+"""Run the ARC state machine against task-derived success positions."""
 
 """Launch Isaac Sim Simulator first."""
 
@@ -53,7 +53,6 @@ from era_bench.tasks.manager_based.arc_embodied.ik_watchdog import ArcIKWatchdog
 from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
 from era_bench.tasks.manager_based.arc_embodied.era_bench_env import EraBenchEnv
 from era_bench.tasks.manager_based.common.geometry_utils import rigid_object_world_size_meters
-from arc_utils import Colors
 import era_bench.tasks  # noqa: F401
 import random
 
@@ -191,25 +190,14 @@ def main():
         raise ValueError("Expected action space to be continuous, but got: {env.action_space}")
     scene_cfg = cast(EraBenchSceneCfg, env.scene.cfg)
 
-    # desired object orientation (we only do position control of object)
+    if not bool(torch.any(env.success_positions.has_targets)):
+        raise RuntimeError("The current ARC task has no output objects to use as success targets.")
 
-    desired_poses_amount = env.success_positions[Colors.RED][0].shape[0]
-    desired_orientation = torch.zeros((env.num_envs, desired_poses_amount, 4), device=env.device)
-    desired_orientation[:, :, 1] = 1.0
     reserve_cube_stacks = env.get_reserve_cubes_poses_by_color()
-    dest_poses_by_color = {
-        color: (
-            torch.cat([torch.stack(poses, dim=0)[:, :, :3], desired_orientation], dim=-1)
-            if len(poses[0]) > 0
-            else torch.empty((env.num_envs, 0, 7), device=env.device)
-        )
-        for color, poses in env.success_positions.items()
-    }
-    print(f"[INFO]: Destination poses by color: {dest_poses_by_color}")
     arc_sm = ArcStateMachine(
         dt=env_cfg.sim.dt * env_cfg.decimation,
         num_envs=env.num_envs,
-        dest_poses=dest_poses_by_color,
+        success_positions=env.success_positions,
         device=env.device,  # pyright: ignore[reportArgumentType]
         position_threshold=0.01,
         reserve_cubes_poses=reserve_cube_stacks,
@@ -249,7 +237,7 @@ def main():
 
             # -- end-effector frame
             ee_frame_sensor: FrameTransformer = env.scene["ee_frame"]
-            tcp_rest_position = ee_frame_sensor.data.target_pos_w[..., 0, :].clone() - env.scene.env_origins
+            tcp_rest_position = ee_frame_sensor.data.target_pos_w[..., 0, :].clone()
             tcp_rest_orientation = ee_frame_sensor.data.target_quat_w[..., 0, :].clone()
             print(f"[DEBUG]: ArcStateMachine: Current TCP position: {tcp_rest_position[0, :3].tolist()}")
 
@@ -328,7 +316,7 @@ def main():
             place_above_recovery.reset(done_env_ids)
             recovery_active_mask[done_env_ids] = False
             arc_sm.reset_idx(torch.where(dones)[0].tolist())
-            env.scene.reset(torch.where(dones)[0].tolist())
+            arc_sm.update_success_positions(env.success_positions, done_env_ids)
 
         print(
             f"[INFO]: Step: {step}, State steps executed: {state_steps}, Total time elapsed: {time.time() - start:.2f} seconds"

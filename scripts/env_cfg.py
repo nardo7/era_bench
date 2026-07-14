@@ -69,6 +69,20 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
     planner_cfg.n_repeat = 10
     planner_cfg.enable_graph = True
 
+    # Input-grid cubes are visual references. They deliberately have no PhysX
+    # colliders, and must also be excluded from CuRobo's USD-stage extraction.
+    # ``world_ignore_substrings`` replaces the planner's defaults when set.
+    env_prim_path = f"/World/envs/env_{env_id}"
+    planner_cfg.world_ignore_substrings = [
+        *(planner_cfg.world_ignore_substrings or [
+            f"{env_prim_path}/Robot",
+            f"{env_prim_path}/target",
+            "/World/defaultGroundPlane",
+            "/curobo",
+        ]),
+        f"{env_prim_path}/input_grid_cube_",
+    ]
+
     # planner_cfg.debug_planner = False
 
     planner = ExtendedCuroboPlanner(

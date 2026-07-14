@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 from typing import Any, TYPE_CHECKING, cast
 
+from arc_utils import ARC_COLOR_TO_COLOR
 from era_bench.tasks.manager_based.common.geometry_utils import mirror_points_across_line
 from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
 from isaaclab.assets import RigidObject
@@ -26,51 +27,6 @@ def _signed_distance_to_line(
         line_dir_xy[:, 0].unsqueeze(1) * points_to_line[:, :, 1]
         - line_dir_xy[:, 1].unsqueeze(1) * points_to_line[:, :, 0]
     )
-
-
-def _as_env_major_positions(env: EraBenchEnv, positions: torch.Tensor) -> torch.Tensor:
-    """Normalize positions to shape ``[num_envs, num_points, dim]``."""
-    if positions.ndim == 2:
-        positions = positions.unsqueeze(1)
-    if positions.shape[0] == env.num_envs:
-        return positions
-    if positions.ndim >= 2 and positions.shape[1] == env.num_envs:
-        return positions.transpose(0, 1)
-    raise ValueError(f"Unexpected position tensor shape {tuple(positions.shape)} for {env.num_envs} envs.")
-
-
-def _targets_to_padded_env_major(
-    env: EraBenchEnv,
-    targets: list[torch.Tensor] | torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return padded targets ``[E, T_max, 3]`` and valid target counts ``[E]``."""
-    if isinstance(targets, torch.Tensor):
-        env_major = _as_env_major_positions(env, targets)[..., :3]
-        counts = torch.full((env.num_envs,), env_major.shape[1], device=env.device, dtype=torch.long)
-        return env_major, counts
-
-    if len(targets) != env.num_envs:
-        raise ValueError(f"Ragged target list must have length {env.num_envs}, got {len(targets)}.")
-
-    counts_list: list[int] = []
-    for target in targets:
-        target_dev = target.to(device=env.device)
-        if target_dev.ndim == 1:
-            target_dev = target_dev.unsqueeze(0)
-        elif target_dev.ndim > 2:
-            raise ValueError(f"Unexpected ragged target tensor shape {tuple(target_dev.shape)}.")
-        counts_list.append(target_dev.shape[0])
-
-    counts = torch.tensor(counts_list, device=env.device, dtype=torch.long)
-    max_targets = int(counts.max().item()) if counts.numel() > 0 else 0
-    padded = torch.zeros((env.num_envs, max_targets, 3), device=env.device)
-    for env_id, target in enumerate(targets):
-        target_dev = target.to(device=env.device)
-        if target_dev.ndim == 1:
-            target_dev = target_dev.unsqueeze(0)
-        if target_dev.shape[0] > 0:
-            padded[env_id, : target_dev.shape[0]] = target_dev[..., :3]
-    return padded, counts
 
 
 def time_out(env: EraBenchEnv) -> torch.Tensor:
@@ -183,70 +139,80 @@ def are_objects_in_success_positions(
     env: EraBenchEnv,
     distance_threshold: float = 0.01,
 ) -> torch.Tensor:
-    """Check if reserve cubes are close to color-matched success positions.
+    """Check whether every output target has a nearby reserve cube of its color.
 
-    Supports ragged targets per environment (different number of target positions
-    in each env) by padding and masking targets in a batched computation.
-
-    For each color, it computes all pairwise distances between reserve cubes and
-    target positions, sorts distances ascending, and verifies that the first
-    ``num_targets[env]`` distances are below ``distance_threshold`` for each env.
+    ``env.success_positions`` stores a fixed number of target slots for every
+    environment. Only the first ``counts[env_id]`` slots belong to that
+    environment's current ARC output; the remaining slots are ignored. For each
+    ARC color, this function selects the active slots of that color, compares
+    them with reserve cubes of the same color, and combines the result across
+    all colors. The TCP must also be more than 5cm away from every target before
+    the task is considered complete.
     """
     scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
     del scene_cfg  # Kept for parity with other terminations and typing context.
 
     success_positions = env.success_positions
-    if not success_positions:
+    if not torch.any(success_positions.has_targets):
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
     reserve_cubes_by_color = env.get_reserve_cubes_positions_by_color()
-    success_mask = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+    success_mask = success_positions.has_targets.clone()
 
-    # check that cubes where placed by checking gripper position is at least 0.05m away
+    # All values are world-frame positions: destination targets, reserve cubes,
+    # and the TCP frame are directly comparable for every environment.
     ee_frame_sensor: FrameTransformer = env.scene["ee_frame"]
-    tcp_rest_position = ee_frame_sensor.data.target_pos_w[..., 0, :].clone() - env.scene.env_origins
+    tcp_position_w = ee_frame_sensor.data.target_pos_w[..., 0, :].clone()
 
-    for color, target_entries in success_positions.items():
-        if len(target_entries) == 0:
-            continue
-
-        target_positions, num_targets = _targets_to_padded_env_major(env, target_entries)
-        if target_positions.shape[1] == 0:
+    for color in ARC_COLOR_TO_COLOR.values():
+        color_target_slots = success_positions.color_mask(color)
+        num_targets = color_target_slots.sum(dim=1)
+        if not torch.any(num_targets):
             continue
 
         reserve_positions_raw = reserve_cubes_by_color.get(color)
         if reserve_positions_raw is None:
+            # A task requiring a color not present in the reserve stacks cannot
+            # succeed in the environments that contain that color.
             success_mask &= num_targets == 0
             continue
 
-        reserve_positions = _as_env_major_positions(env, reserve_positions_raw)[..., :3]
+        reserve_positions = reserve_positions_raw[..., :3]
         num_reserve = reserve_positions.shape[1]
         if num_reserve == 0:
             success_mask &= num_targets == 0
             continue
 
-        # Pairwise 3D distances per env: [E, num_targets_max, num_reserve]
-        distances = torch.cdist(target_positions, reserve_positions, p=2)
-        target_valid_mask = torch.arange(target_positions.shape[1], device=env.device).unsqueeze(
-            0
-        ) < num_targets.unsqueeze(1)
-        # For each target, keep only its closest reserve cube: [E, num_targets_max]
+        # Pairwise distances: [environment, target slot, reserve cube]. Slots
+        # belonging to other colors are filtered out below.
+        distances = torch.cdist(success_positions.positions_w, reserve_positions, p=2)
         closest_distances = torch.min(distances, dim=2).values
+        target_is_reached = closest_distances <= distance_threshold
+        non_color_slots_are_ignored = torch.ones_like(target_is_reached)
+        color_targets_are_reached = torch.where(
+            color_target_slots,
+            target_is_reached,
+            non_color_slots_are_ignored,
+        )
+        color_success = torch.all(color_targets_are_reached, dim=1)
 
-        within_thresh = closest_distances <= distance_threshold
-        selected_within_thresh = torch.where(target_valid_mask, within_thresh, torch.ones_like(within_thresh))
-
-        color_success = torch.all(selected_within_thresh, dim=1)
-
-        has_enough_pairs = num_reserve >= num_targets
-        color_success &= has_enough_pairs
+        # Every output target needs a distinct available cube in principle. This
+        # count check preserves the existing success semantics while ruling out
+        # colors with fewer reserve cubes than requested output targets.
+        enough_reserve_cubes = num_reserve >= num_targets
+        color_success &= enough_reserve_cubes
         success_mask &= color_success
 
-        # compute the 3D distance from the TCP to the target positions for this color
-        tcp_to_targets = torch.cdist(tcp_rest_position.unsqueeze(1), target_positions, p=2)
-        tcp_to_targets_min = torch.min(tcp_to_targets, dim=2).values.squeeze(1)
-        is_tcp_far_enough = tcp_to_targets_min > 0.05
-        success_mask &= is_tcp_far_enough
+        # Do not mark success while the TCP is still at a target location. Set
+        # non-color slots to infinity so they cannot affect the minimum.
+        tcp_to_targets = torch.cdist(tcp_position_w.unsqueeze(1), success_positions.positions_w, p=2).squeeze(1)
+        tcp_to_color_targets = torch.where(
+            color_target_slots,
+            tcp_to_targets,
+            torch.full_like(tcp_to_targets, torch.inf),
+        )
+        tcp_is_away_from_color_targets = torch.min(tcp_to_color_targets, dim=1).values > 0.05
+        success_mask &= tcp_is_away_from_color_targets
 
     if torch.any(success_mask):
         load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))

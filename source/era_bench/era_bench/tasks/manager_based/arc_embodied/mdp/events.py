@@ -9,7 +9,7 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING, cast
 
-from arc_utils import Colors, ARC_COLOR_TO_COLOR
+from arc_utils import ARC_COLOR_TO_COLOR, Colors
 
 from era_bench.tasks.manager_based.arc_embodied.mdp.commands import LoadTaskCommand
 import isaaclab.utils.math as math_utils
@@ -129,32 +129,23 @@ def _setup_input_grid(env: EraBenchEnv, env_id: int, input_grid_cubes: torch.Ten
         )
 
 
-def _setup_destination_poses(env: EraBenchEnv, env_id: int, output_grid_cubes: torch.Tensor) -> None:
-    arc_colors: list[int] = output_grid_cubes[:, 2].unique().tolist()
-    colors = [ARC_COLOR_TO_COLOR[arc_color] for arc_color in arc_colors]
+def _setup_success_positions(env: EraBenchEnv, env_id: int, output_grid_cubes: torch.Tensor) -> None:
+    """Store the current task's output objects as world-frame success targets."""
     scene_cfg = env.cfg.scene
+    target_count = output_grid_cubes.shape[0]
+    positions_w = torch.empty((target_count, 3), device=env.device, dtype=output_grid_cubes.dtype)
+    positions_w[:, :2] = (
+        output_grid_cubes[:, :2]
+        + env.scene.env_origins[env_id, :2]
+        + torch.tensor(scene_cfg.output_grid_center_local[:2], device=env.device, dtype=output_grid_cubes.dtype)
+    )
+    positions_w[:, 2] = scene_cfg.cubes_size[2] * 0.5 + env.scene.env_origins[env_id, 2]
 
-    for arc_color, color in zip(arc_colors, colors):
-        color_poses = env.success_positions[color]
-        if len(color_poses) == 0:
-            env.success_positions[color] = [torch.empty((0, 7), device=env.device)] * env.num_envs
-        cube_planar_positions = output_grid_cubes[output_grid_cubes[:, 2] == arc_color]
-        z = torch.full(
-            ((cube_planar_positions.shape[0], 1)),
-            scene_cfg.cubes_size[2] * 0.5,
-            device=env.device,
-        )
-        quat = (
-            torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device).unsqueeze(0).repeat(cube_planar_positions.shape[0], 1)
-        )
-        env.success_positions[color][env_id] = torch.cat(
-            [
-                cube_planar_positions,
-                z,
-                quat,
-            ],
-            dim=-1,
-        )
+    env.success_positions.replace(
+        env_id,
+        positions_w=positions_w,
+        color_ids=output_grid_cubes[:, 2].to(dtype=torch.long),
+    )
 
 
 def setup_task_grid(env: EraBenchEnv, env_ids: list[int]):
@@ -167,57 +158,37 @@ def setup_task_grid(env: EraBenchEnv, env_ids: list[int]):
     for env_id in env_ids:
         input_grid_cubes, output_grid_cubes = load_task_command.get_features(env_id)
         _setup_input_grid(env, env_id, input_grid_cubes)
-        _setup_destination_poses(env, env_id, output_grid_cubes)
+        # _setup_success_positions(env, env_id, output_grid_cubes)
 
 
-def sample_success_positions(
-    env: EraBenchEnv,
-    env_ids: list[int],
-):
+def sample_success_positions(env: EraBenchEnv, env_ids: list[int] | torch.Tensor) -> None:
+    """Load fixed destination positions for state-machine testing.
+
+    This is intentionally separate from task-derived output targets and remains
+    available as a reset event when testing the manipulation stack in isolation.
+    """
     scene_cfg = env.cfg.scene
-    # if len(env.success_positions.keys()) == 0:
-    #     env.success_positions =
-    dest_poses = (
-        torch.tensor(
-            [
-                # [0.0, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                # [-0.25, 0.75, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                # [0.25, 0.75, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                # [0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                # [-0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                # [0.0, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                # [-0.25, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                # [0.25, 0.5, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.25, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.19, 0.25, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.25, 0.31, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.25, 0.37, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.25, 0.43, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.19, 0.43, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.19, 0.37, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-                [-0.19, 0.31, scene_cfg.cubes_size[2] * 0.5, 0.0, 0.0, 0.0, 0.0],
-            ],
-            device=env.device,
-        )
-        .unsqueeze(0)
-        .expand(env.num_envs, -1, -1)
+    local_positions = torch.tensor(
+        [
+            [-0.25, 0.25, scene_cfg.cubes_size[2] * 0.5],
+            [-0.19, 0.25, scene_cfg.cubes_size[2] * 0.5],
+            [-0.25, 0.31, scene_cfg.cubes_size[2] * 0.5],
+            [-0.25, 0.37, scene_cfg.cubes_size[2] * 0.5],
+            [-0.25, 0.43, scene_cfg.cubes_size[2] * 0.5],
+            [-0.19, 0.43, scene_cfg.cubes_size[2] * 0.5],
+            [-0.19, 0.37, scene_cfg.cubes_size[2] * 0.5],
+            [-0.19, 0.31, scene_cfg.cubes_size[2] * 0.5],
+        ],
+        device=env.device,
     )
+    test_color = scene_cfg.get_reserve_cube_colors()[-1]
+    test_color_id = next(arc_color for arc_color, color in ARC_COLOR_TO_COLOR.items() if color is test_color)
+    env_ids_tensor = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
 
-    possible_colors = set(scene_cfg.get_reserve_cube_colors())
-    colors = [scene_cfg.get_reserve_cube_colors()[-1]] * dest_poses.shape[1]
-
-    pairs = list(zip(colors, dest_poses.permute(1, 0, 2)))
-    dest_poses_by_color: dict[Colors, torch.Tensor] = {}
-    for color in possible_colors:
-        color_poses = [pose for c, pose in pairs if c == color]
-        if color_poses:
-            dest_poses_by_color[color] = torch.stack(color_poses, dim=0).permute(1, 0, 2)
-        else:
-            dest_poses_by_color[color] = torch.empty((env.num_envs, 0, dest_poses.shape[-1]), device=env.device)
-    env.success_positions = {
-        color: [cube_pose for cube_pose in dest_poses_by_color[color]] for color in dest_poses_by_color
-    }
-    print(f"[INFO]: Destination poses by color: {env.success_positions}")
+    for env_id in env_ids_tensor.tolist():
+        positions_w = local_positions + env.scene.env_origins[env_id]
+        color_ids = torch.full((local_positions.shape[0],), test_color_id, device=env.device, dtype=torch.long)
+        env.success_positions.replace(env_id, positions_w=positions_w, color_ids=color_ids)
 
 
 def set_default_joint_pose(

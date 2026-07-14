@@ -11,15 +11,23 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.assets import Articulation, RigidObject
 import isaaclab.utils.math as math_utils
 
+from .mdp.commands import MAX_OBJECTS_PER_GRID
+from .success_positions import SuccessPositionBuffer
+
 
 class EraBenchEnv(ManagerBasedRLMimicEnv):
     """Environment for the ERA Bench task."""
 
     cfg: EraBenchEnvCfg
-    success_positions: dict[Colors, list[Tensor]] = {}
+    success_positions: SuccessPositionBuffer
 
     def __init__(self, cfg: EraBenchEnvCfg, **kwargs):
         super().__init__(cfg, **kwargs)
+        self.success_positions = SuccessPositionBuffer(
+            num_envs=self.num_envs,
+            max_targets=MAX_OBJECTS_PER_GRID,
+            device=self.device,
+        )
         self._arm_pose_hold_active = False
         self._held_arm_pose_action: Tensor | None = None
         self._held_arm_joint_targets: Tensor | None = None

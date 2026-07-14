@@ -156,7 +156,7 @@ class EventCfg:
     setup_task_grid = EventTerm(func=mdp.setup_task_grid, mode="reset")
     init_reserve_cube_stacks_positions = EventTerm(func=mdp.init_reserve_cubes_positions, mode="reset")
 
-    # sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
+    sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
 
 
 @configclass
@@ -217,7 +217,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # general settings
         self.decimation = 5
-        self.episode_length_s = 5.0
+        self.episode_length_s = 80.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render.rendering_mode = "balanced"
