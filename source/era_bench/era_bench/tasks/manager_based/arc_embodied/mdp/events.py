@@ -9,7 +9,7 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING, cast
 
-from arc_utils import Colors
+from arc_utils import Colors, ARC_COLOR_TO_COLOR
 
 from era_bench.tasks.manager_based.arc_embodied.mdp.commands import LoadTaskCommand
 import isaaclab.utils.math as math_utils
@@ -129,6 +129,34 @@ def _setup_input_grid(env: EraBenchEnv, env_id: int, input_grid_cubes: torch.Ten
         )
 
 
+def _setup_destination_poses(env: EraBenchEnv, env_id: int, output_grid_cubes: torch.Tensor) -> None:
+    arc_colors: list[int] = output_grid_cubes[:, 2].unique().tolist()
+    colors = [ARC_COLOR_TO_COLOR[arc_color] for arc_color in arc_colors]
+    scene_cfg = env.cfg.scene
+
+    for arc_color, color in zip(arc_colors, colors):
+        color_poses = env.success_positions[color]
+        if len(color_poses) == 0:
+            env.success_positions[color] = [torch.empty((0, 7), device=env.device)] * env.num_envs
+        cube_planar_positions = output_grid_cubes[output_grid_cubes[:, 2] == arc_color]
+        z = torch.full(
+            ((cube_planar_positions.shape[0], 1)),
+            scene_cfg.cubes_size[2] * 0.5,
+            device=env.device,
+        )
+        quat = (
+            torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device).unsqueeze(0).repeat(cube_planar_positions.shape[0], 1)
+        )
+        env.success_positions[color][env_id] = torch.cat(
+            [
+                cube_planar_positions,
+                z,
+                quat,
+            ],
+            dim=-1,
+        )
+
+
 def setup_task_grid(env: EraBenchEnv, env_ids: list[int]):
     load_task_command: LoadTaskCommand = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
     env_ids_tensor = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
@@ -137,8 +165,9 @@ def setup_task_grid(env: EraBenchEnv, env_ids: list[int]):
 
     _reset_input_grid_cubes(env, env_ids_tensor)
     for env_id in env_ids:
-        input_grid_cubes, _ = load_task_command.get_features(env_id)
+        input_grid_cubes, output_grid_cubes = load_task_command.get_features(env_id)
         _setup_input_grid(env, env_id, input_grid_cubes)
+        _setup_destination_poses(env, env_id, output_grid_cubes)
 
 
 def sample_success_positions(

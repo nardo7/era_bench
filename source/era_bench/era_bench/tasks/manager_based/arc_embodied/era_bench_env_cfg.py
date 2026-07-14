@@ -153,11 +153,10 @@ class EventCfg:
         },
     )
 
+    setup_task_grid = EventTerm(func=mdp.setup_task_grid, mode="reset")
     init_reserve_cube_stacks_positions = EventTerm(func=mdp.init_reserve_cubes_positions, mode="reset")
 
-    sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
-
-    setup_task_grid = EventTerm(func=mdp.setup_task_grid, mode="reset")
+    # sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
 
 
 @configclass
