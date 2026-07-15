@@ -19,7 +19,7 @@ class ExtendedCuroboPlanner(CuroboPlanner):
     """
 
     _MAX_TASK_TRAJECTORY_DISTANCE = torch.linalg.vector_norm(
-        torch.tensor([0.8, -0.1, 0.23]) - torch.tensor([-0.25, 0.75, 0.1])
+        torch.tensor([0.72, -0.1, 0.24]) - torch.tensor([-0.25, 0.75, 0.15])
     )
     _SHORT_PATH_DISTANCE = 0.16
     _MAX_ADDITIONAL_CONTACT_WINDOW = 0.1

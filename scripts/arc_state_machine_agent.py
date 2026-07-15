@@ -113,7 +113,6 @@ def execute_plan(
     info: dict | None = None
 
     if current_plan is None or current_plan.position is None or len(current_plan.position) == 0:
-        print("[INFO]: No planned trajectory poses available. Skipping execution.")
         return obs, reward, terminated, truncated, info, 0
 
     grasp_center_poses = [planner.panda_hand_pose_to_grasp_center_pose(pose) for pose in planned_trayectory_poses]
@@ -123,11 +122,7 @@ def execute_plan(
     print(f"[INFO]: Trayectory goal planned: {last_action[:3].tolist()} with quaternion {last_action[3:7].tolist()}")
     executed_steps = 0
     plan_joint_positions = cast(torch.Tensor, current_plan.position)
-    print(
-        "[INFO]: Executing plan with "
-        f"{plan_joint_positions.shape[0]} waypoints "
-        f"(including planner-configured settling repeats)."
-    )
+
     if current_plan.joint_names is None:
         raise ValueError("Expected current CuRobo plan to include joint names.")
     plan_joint_names = list(current_plan.joint_names)
@@ -190,19 +185,15 @@ def main():
         raise ValueError("Expected action space to be continuous, but got: {env.action_space}")
     scene_cfg = cast(EraBenchSceneCfg, env.scene.cfg)
 
-    if not bool(torch.any(env.success_positions.has_targets)):
-        raise RuntimeError("The current ARC task has no output objects to use as success targets.")
-
-    reserve_cube_stacks = env.get_reserve_cubes_poses_by_color()
     arc_sm = ArcStateMachine(
         dt=env_cfg.sim.dt * env_cfg.decimation,
         num_envs=env.num_envs,
         success_positions=env.success_positions,
         device=env.device,  # pyright: ignore[reportArgumentType]
         position_threshold=0.01,
-        reserve_cubes_poses=reserve_cube_stacks,
+        reserve_cube_stacks=env.reserve_cube_stacks,
         cube_sizes=scene_cfg.cubes_size,
-        cubes_per_stack=int(scene_cfg.reserve_cubes_amount_per_color / scene_cfg.reserve_cubes_amount_per_line),
+        cubes_per_stack=int(scene_cfg.reserve_cubes_amount_per_stack / scene_cfg.reserve_cubes_amount_per_line),
     )
     place_above_watchdog = ArcIKWatchdog(
         num_envs=env.num_envs,
@@ -225,7 +216,6 @@ def main():
     step = 0
     state_steps = 0
     start = time.time()
-    print(f"[INFO]: Arc IK recovery log file: {place_above_recovery.log_path}")
     recovery_active_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     while simulation_app.is_running():
         # run everything in inference mode
@@ -239,7 +229,6 @@ def main():
             ee_frame_sensor: FrameTransformer = env.scene["ee_frame"]
             tcp_rest_position = ee_frame_sensor.data.target_pos_w[..., 0, :].clone()
             tcp_rest_orientation = ee_frame_sensor.data.target_quat_w[..., 0, :].clone()
-            print(f"[DEBUG]: ArcStateMachine: Current TCP position: {tcp_rest_position[0, :3].tolist()}")
 
             next_pose, arc_state = arc_sm.compute(torch.cat((tcp_rest_position, tcp_rest_orientation), dim=-1))
             if arc_state[0] in [
@@ -247,16 +236,18 @@ def main():
                 ArcStates.APPROACHING_PLACING.python_value,
                 ArcStates.PLACING.python_value,
             ]:
-                color = arc_sm.get_current_goal_color(0)
-                reserve_cube_idx = arc_sm.get_current_stack_index(0)
-                cube_name = scene_cfg.get_reserve_cube_name(color, reserve_cube_idx)
+                stack_idx, cube_idx = arc_sm.get_current_cube_slot(0)
+                cube_name = scene_cfg.get_reserve_cube_name(stack_idx, cube_idx)
                 planner.set_expected_attached_object(cube_name)
             else:
                 planner.set_expected_attached_object(None)
-            print(f"[DEBUG]: ArcStateMachine: Next desired pose: {next_pose[0, :3].tolist()}")
+
+            if args_cli.debug:
+                print(f"[DEBUG]: ArcStateMachine: Current TCP position: {tcp_rest_position[0, :3].tolist()}")
+                print(f"[DEBUG]: ArcStateMachine: Next desired pose: {next_pose[0, :3].tolist()}")
+                print(f"[DEBUG]: ArcStateMachine: Current state: {ArcStates(arc_state[0].item())}")
             plan_success = False
 
-            print(f"[DEBUG]: ArcStateMachine: Current state: {ArcStates(arc_state[0].item())}")
             if recovery_active_mask.any():
                 place_above_watchdog.reset(torch.nonzero(recovery_active_mask, as_tuple=False).flatten())
             watchdog_update = place_above_watchdog.update(
@@ -316,6 +307,7 @@ def main():
             place_above_recovery.reset(done_env_ids)
             recovery_active_mask[done_env_ids] = False
             arc_sm.reset_idx(torch.where(dones)[0].tolist())
+            arc_sm.update_reserve_cube_stacks(env.reserve_cube_stacks, done_env_ids)
             arc_sm.update_success_positions(env.success_positions, done_env_ids)
 
         print(

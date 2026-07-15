@@ -154,9 +154,8 @@ class EventCfg:
     )
 
     setup_task_grid = EventTerm(func=mdp.setup_task_grid, mode="reset")
-    init_reserve_cube_stacks_positions = EventTerm(func=mdp.init_reserve_cubes_positions, mode="reset")
-
-    sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
+    reset_reserve_cube_stacks = EventTerm(func=mdp.reset_reserve_cube_stacks, mode="reset")
+    # sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
 
 
 @configclass
@@ -216,12 +215,12 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
 
         # general settings
-        self.decimation = 5
+        self.decimation = 5  # 50Hz
         self.episode_length_s = 80.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render.rendering_mode = "balanced"
-        self.sim.render_interval = 10
+        self.sim.render_interval = 10  # 10Hz
         self.sim.render.antialiasing_mode = "DLAA"
         self.sim.render.enable_dl_denoiser = True
 

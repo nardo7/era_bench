@@ -9,24 +9,17 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING, cast
 
-from arc_utils import ARC_COLOR_TO_COLOR, Colors
+from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, GridPair
 
 from era_bench.tasks.manager_based.arc_embodied.mdp.commands import LoadTaskCommand
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
+from pxr import Gf
 
 if TYPE_CHECKING:
     from ..era_bench_env import EraBenchEnv
     from isaaclab.envs import ManagerBasedEnv
-
-
-def _get_reserve_cube_color_order(env: EraBenchEnv) -> list[Colors]:
-    """Return reserve cube colors in the scene's existing name order without duplicates."""
-    return sorted(
-        list(set(env.cfg.scene.get_reserve_cube_colors())),
-        key=lambda c: env.cfg.scene.get_reserve_cube_colors().index(c),
-    )
 
 
 def prepare_task_command(env: EraBenchEnv, env_ids: list[int] | torch.Tensor) -> None:
@@ -35,52 +28,112 @@ def prepare_task_command(env: EraBenchEnv, env_ids: list[int] | torch.Tensor) ->
     load_task_command.prepare_reset(env_ids)
 
 
-def init_reserve_cubes_positions(env: EraBenchEnv, env_ids: list[int]):
-    """Initialize the positions of reserve cubes in the environment.
+def _reserve_palette(
+    current_output_grid_cubes: torch.Tensor,
+    task_input_colors: torch.Tensor,
+    task_output_colors: torch.Tensor,
+    stack_count: int,
+) -> torch.Tensor:
+    """Select stack colors from the active pair, then the rest of its task."""
+    current_output_colors = torch.unique(current_output_grid_cubes[:, 2].to(dtype=torch.long), sorted=True)
+    if current_output_colors.numel() > stack_count:
+        raise ValueError(
+            f"Task requires {current_output_colors.numel()} output colors, but only {stack_count} reserve stacks exist."
+        )
 
-    This function sets the positions of reserve cubes based on their color and index.
-    The positions are determined by the scene configuration and are set in a grid-like
-    pattern with specified offsets and separation distances.
+    palette: list[int] = []
+    for candidates in (
+        current_output_colors,
+        task_output_colors,
+        task_input_colors,
+    ):
+        for arc_color_id in candidates.tolist():
+            if arc_color_id not in palette:
+                palette.append(arc_color_id)
+            if len(palette) == stack_count:
+                return _shuffle_reserve_palette(palette, current_output_grid_cubes.device)
 
-    Args:
-        env (EraBenchEnv): The environment instance containing the scene and assets.
-        env_ids (list[int]): List of environment IDs for which to initialize the reserve cubes.
-    """
+    for arc_color_id in sorted(ARC_COLOR_TO_COLOR):
+        if arc_color_id not in palette:
+            palette.append(arc_color_id)
+        if len(palette) == stack_count:
+            return _shuffle_reserve_palette(palette, current_output_grid_cubes.device)
+    raise RuntimeError("ARC palette is smaller than the configured reserve stack count.")
+
+
+def _shuffle_reserve_palette(palette: list[int], device: torch.device) -> torch.Tensor:
+    """Randomize physical stack assignment after selecting the reserve colors."""
+    color_ids = torch.tensor(palette, device=device, dtype=torch.long)
+    return color_ids[torch.randperm(color_ids.numel(), device=device)]
+
+
+def _task_grid_colors(task_grid_pairs: list[GridPair], grid: str, device: torch.device) -> torch.Tensor:
+    """Return the non-background ARC colors used in one grid across a task's pairs."""
+    return torch.tensor(
+        sorted({color for pair in task_grid_pairs for row in getattr(pair, grid) for color in row if color != 0}),
+        device=device,
+        dtype=torch.long,
+    )
+
+
+def _set_reserve_cube_color(
+    env: EraBenchEnv, env_id: int, stack_index: int, cube_index: int, arc_color_id: int
+) -> None:
+    """Set a reserve cube's color through the scene configuration's shader lookup."""
+    shader = env.cfg.scene.get_reserve_cube_shader(env_id, stack_index, cube_index)
+    shader.GetAttribute("inputs:diffuseColor").Set(Gf.Vec3f(*COLOR_RGB[ARC_COLOR_TO_COLOR[arc_color_id]]))
+
+
+def reset_reserve_cube_stacks(env: EraBenchEnv, env_ids: list[int] | torch.Tensor) -> None:
+    """Assign task-local colors and fixed reset poses to all physical reserve stacks."""
     scene_cfg = env.cfg.scene
-    x_offsets = [0.30]  # , 0.55]
-    y_offsets = [-0.1, 0.1]
+    env_ids_tensor = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
+    if env_ids_tensor.numel() == 0:
+        return
+
     base_cube_center_height = scene_cfg.cubes_size[2] / 2
-    colors = _get_reserve_cube_color_order(env)
-    for color_idx, color in enumerate(colors):
-        for i in range(scene_cfg.reserve_cubes_amount_per_color):
-            cube_name = scene_cfg.get_reserve_cube_name(color, i)
+    identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device)
 
-            offset_x = x_offsets[int(color_idx / 2)]
-            offset_y = y_offsets[color_idx % 2]
-            x = offset_x + (i % scene_cfg.reserve_cubes_amount_per_line) * (
-                scene_cfg.cubes_size[0] + scene_cfg.separation_distance
-            )
-            y = offset_y
-            z = base_cube_center_height + (i // scene_cfg.reserve_cubes_amount_per_line) * scene_cfg.cubes_size[2]
-            cube_asset: RigidObject = env.scene[cube_name]
+    load_task_command: LoadTaskCommand = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
+    for env_id in env_ids_tensor.tolist():
+        input_grid_cubes, output_grid_cubes = load_task_command.get_features(env_id)
+        task_pixel_pairs = load_task_command.get_current_task_grid_pairs(env_id)
+        palette = _reserve_palette(
+            output_grid_cubes,
+            _task_grid_colors(task_pixel_pairs, "input", env.device),
+            _task_grid_colors(task_pixel_pairs, "output", env.device),
+            scene_cfg.reserve_stacks_amount,
+        )
+        stack_poses_w = torch.empty(
+            (scene_cfg.reserve_stacks_amount, scene_cfg.reserve_cubes_amount_per_stack, 7),
+            device=env.device,
+        )
+        env_id_tensor = torch.tensor([env_id], device=env.device, dtype=torch.long)
 
-            position = torch.tensor([x, y, z], device=env.device).unsqueeze(0).repeat(len(env_ids), 1)
-            position += env.scene.env_origins[env_ids]
+        for stack_index, arc_color_id in enumerate(palette.tolist()):
+            base_x, base_y = scene_cfg.get_reserve_stack_start_local(stack_index)
+            for cube_index in range(scene_cfg.reserve_cubes_amount_per_stack):
+                cube_name = scene_cfg.get_reserve_cube_name(stack_index, cube_index)
+                x = base_x + (cube_index % scene_cfg.reserve_cubes_amount_per_line) * (
+                    scene_cfg.cubes_size[0] + scene_cfg.separation_distance
+                )
+                z = (
+                    base_cube_center_height
+                    + (cube_index // scene_cfg.reserve_cubes_amount_per_line) * scene_cfg.cubes_size[2]
+                )
+                pose_w = torch.cat(
+                    (
+                        torch.tensor([x, base_y, z], device=env.device) + env.scene.env_origins[env_id],
+                        identity_quat,
+                    )
+                )
+                stack_poses_w[stack_index, cube_index] = pose_w
+                cube_asset: RigidObject = env.scene[cube_name]
+                cube_asset.write_root_pose_to_sim(pose_w.unsqueeze(0), env_ids=env_id_tensor)
+                cube_asset.write_root_velocity_to_sim(torch.zeros((1, 6), device=env.device), env_ids=env_id_tensor)
+                _set_reserve_cube_color(env, env_id, stack_index, cube_index, arc_color_id)
 
-            cube_asset.write_root_pose_to_sim(
-                torch.cat(
-                    [
-                        position,
-                        torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device).unsqueeze(0).repeat(len(env_ids), 1),
-                    ],
-                    dim=-1,
-                ),
-                env_ids=env_ids,
-            )
-            cube_asset.write_root_velocity_to_sim(
-                torch.zeros((1, 6), device=env.device),
-                env_ids=env_ids,
-            )
+        env.reserve_cube_stacks.replace(env_id, stack_poses_w, palette)
 
 
 def _reset_input_grid_cubes(env: EraBenchEnv, env_ids_tensor: torch.Tensor):
@@ -139,8 +192,7 @@ def _setup_success_positions(env: EraBenchEnv, env_id: int, output_grid_cubes: t
         + env.scene.env_origins[env_id, :2]
         + torch.tensor(scene_cfg.output_grid_center_local[:2], device=env.device, dtype=output_grid_cubes.dtype)
     )
-    positions_w[:, 2] = scene_cfg.cubes_size[2] * 0.5 + env.scene.env_origins[env_id, 2]
-
+    positions_w[:, 2] = scene_cfg.cubes_size[2] * 0.5
     env.success_positions.replace(
         env_id,
         positions_w=positions_w,
@@ -158,7 +210,7 @@ def setup_task_grid(env: EraBenchEnv, env_ids: list[int]):
     for env_id in env_ids:
         input_grid_cubes, output_grid_cubes = load_task_command.get_features(env_id)
         _setup_input_grid(env, env_id, input_grid_cubes)
-        # _setup_success_positions(env, env_id, output_grid_cubes)
+        _setup_success_positions(env, env_id, output_grid_cubes)
 
 
 def sample_success_positions(env: EraBenchEnv, env_ids: list[int] | torch.Tensor) -> None:
@@ -181,8 +233,7 @@ def sample_success_positions(env: EraBenchEnv, env_ids: list[int] | torch.Tensor
         ],
         device=env.device,
     )
-    test_color = scene_cfg.get_reserve_cube_colors()[-1]
-    test_color_id = next(arc_color for arc_color, color in ARC_COLOR_TO_COLOR.items() if color is test_color)
+    test_color_id = min(ARC_COLOR_TO_COLOR)
     env_ids_tensor = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
 
     for env_id in env_ids_tensor.tolist():

@@ -11,6 +11,7 @@ from isaaclab.utils import configclass
 from arc_utils import get_era_bench_tasks, sort_by_amount_of_output_pixels, GridPair, Pixel
 
 MAX_OBJECTS_PER_GRID = 64
+MAX_OUTPUT_OBJECTS_PER_GRID = 40
 OBJECT_FEATURES = 3  # x, y, color
 COMMAND_HEADER_FEATURES = 2  # input object count, output object count
 
@@ -43,8 +44,10 @@ class LoadTaskCommandCfg(CommandTermCfg):
 class LoadTaskCommand(CommandTerm):
     """
     Command responsible for loading ARC-AGI tasks for the environment.
-    The idea is to load one task per environment, and when the task is completed or failed, load the next task in the list.
-    If the task is failed, it will be retried for a number of times specified in the configuration. When retries are exhausted, the task will continue to its next pair. If the task is completed, it will be marked as completed and the next task will be loaded.
+    The idea is to load one task pair per environment. A failed pair is retried for
+    the configured number of retries; once those retries are exhausted, or when a
+    pair completes, the command advances to the next pair. It advances to the
+    next task only after all selected pairs for the current task have finished.
     It requires that the task status is set externally by the done terms.
     """
 
@@ -81,7 +84,6 @@ class LoadTaskCommand(CommandTerm):
 
     def _resolve_task_queue(self, task_ids: list[str] | None) -> list[str]:
         """Return the ordered, unique task IDs available to this command term."""
-        print(f"[DEBUG]: _resolve_task_queue: task_ids={task_ids}, len(self.tasks)={len(self.tasks)}")
         task_queue = [task.task_id for task in self.tasks] if task_ids is None else list(task_ids)
         if len(task_queue) != len(set(task_queue)):
             raise ValueError("tasks_ids must not contain duplicate task IDs.")
@@ -147,6 +149,7 @@ class LoadTaskCommand(CommandTerm):
         """Return the unpadded input/output pixel objects for every environment."""
         pixel_pairs: list[tuple[list[Pixel], list[Pixel]]] = []
         for grid_pair in self.current_grid_pairs:
+
             pixel_pairs.append(
                 (
                     grid_pair.to_continuous_coordinates(
@@ -177,6 +180,11 @@ class LoadTaskCommand(CommandTerm):
             )
             result.append(pair)
         return result
+
+    def get_current_task_grid_pairs(self, env_id: int) -> list[GridPair]:
+        """Return every train and test pair for the environment's active task."""
+        task = self._tasks_by_id[self.current_tasks[env_id]]
+        return [*task.train, *task.test]
 
     def get_features(self, env_id: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Return the positions of the objects in the current task for the given environment ID."""
@@ -211,6 +219,9 @@ class LoadTaskCommand(CommandTerm):
         self._resample_command(env_ids_tensor)
         self._refresh_command()
         self._prepared_for_reset[env_ids_tensor] = True
+        print(
+            f"[INFO]: Tasks completed: {[task_id for task_id, status in self.tasks_status.items() if status == TaskStatus.COMPLETED]}; tasks failed: {[task_id for task_id, status in self.tasks_status.items() if status == TaskStatus.FAILED]}"
+        )
 
     def _resample_command(self, env_ids: Sequence[int] | torch.Tensor):
         """Resample tasks pairs for the given environment IDs."""
@@ -230,7 +241,7 @@ class LoadTaskCommand(CommandTerm):
                 if self.retries_per_task[current_task_id] > self.cfg.retries:
                     self._transition_to_next_pair(env_id)
             elif self.tasks_status[current_task_id] == TaskStatus.COMPLETED:
-                self._transition_to_next_task(env_id)
+                self._transition_to_next_pair(env_id)
 
     def _transition_to_next_pair(self, env_id: int):
         """Transition to the next pair in the current task for the given environment ID."""
@@ -257,7 +268,11 @@ class LoadTaskCommand(CommandTerm):
 
     def _transition_to_next_task(self, env_id: int):
         """Transition to the next task for the given environment ID."""
-        self.tasks_status[self.current_tasks[env_id]] = TaskStatus.COMPLETED
+        self.tasks_status[self.current_tasks[env_id]] = (
+            TaskStatus.FAILED
+            if self.retries_per_task[self.current_tasks[env_id]] == TaskStatus.FAILED
+            else TaskStatus.COMPLETED
+        )
         next_task_id = self._get_next_task_id()
         if next_task_id is not None:
             self.current_tasks[env_id] = next_task_id
@@ -305,6 +320,7 @@ class LoadTaskCommand(CommandTerm):
         input_offset = COMMAND_HEADER_FEATURES
         output_offset = input_offset + MAX_OBJECTS_PER_GRID * OBJECT_FEATURES
         for env_id, (input_objects, output_objects) in enumerate(self.current_pixel_pairs):
+
             if len(input_objects) > MAX_OBJECTS_PER_GRID or len(output_objects) > MAX_OBJECTS_PER_GRID:
                 raise ValueError(
                     f"Task '{self.current_tasks[env_id]}' has more than {MAX_OBJECTS_PER_GRID} objects in a grid."

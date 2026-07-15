@@ -45,7 +45,9 @@ def configure_env(args_cli: Namespace) -> ManagerBasedRLEnvCfg:
     return env_cfg
 
 
-def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int) -> ExtendedCuroboPlanner:
+def configure_curobo_planner(
+    env: ManagerBasedRLEnv, task_name: str, env_id: int, debug: bool = False
+) -> ExtendedCuroboPlanner:
     """Configure cuRobo planner, optionally with extended goalset support.
 
     Args:
@@ -60,7 +62,7 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
     planner_cfg = CuroboPlannerCfg.from_task_name(task_name)
     planner_cfg.visualize_plan = False
     planner_cfg.visualize_spheres = False
-    planner_cfg.debug_planner = False
+    planner_cfg.debug_planner = debug
     planner_cfg.retreat_distance = 0.0
     planner_cfg.approach_distance = 0.0
     planner_cfg.time_dilation_factor = 1.0
@@ -74,12 +76,15 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
     # ``world_ignore_substrings`` replaces the planner's defaults when set.
     env_prim_path = f"/World/envs/env_{env_id}"
     planner_cfg.world_ignore_substrings = [
-        *(planner_cfg.world_ignore_substrings or [
-            f"{env_prim_path}/Robot",
-            f"{env_prim_path}/target",
-            "/World/defaultGroundPlane",
-            "/curobo",
-        ]),
+        *(
+            planner_cfg.world_ignore_substrings
+            or [
+                f"{env_prim_path}/Robot",
+                f"{env_prim_path}/target",
+                "/World/defaultGroundPlane",
+                "/curobo",
+            ]
+        ),
         f"{env_prim_path}/input_grid_cube_",
     ]
 
