@@ -47,6 +47,11 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
             )
         )
 
+    def load_managers(self):
+        super().load_managers()
+        load_task_command: Any = self.command_manager.get_term("load_task")
+        load_task_command._initialize_from_dataset()
+
     def _action_slice(self, term_name: str) -> slice:
         """Return the slice of the concatenated action belonging to a named term."""
         start = 0

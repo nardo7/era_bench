@@ -9,6 +9,7 @@ import torch
 from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.utils import configclass
 from arc_utils import get_era_bench_tasks, sort_by_amount_of_output_pixels, GridPair, Pixel
+from ...common.dataset_handler import AppendHDF5DatasetFileHandler
 
 MAX_OBJECTS_PER_GRID = 64
 MAX_OUTPUT_OBJECTS_PER_GRID = 40
@@ -82,7 +83,20 @@ class LoadTaskCommand(CommandTerm):
         self._command = torch.zeros((self.num_envs, command_dim), device=self.device, dtype=torch.float32)
         self._command_state: tuple[tuple[str, int], ...] | None = None
         self._prepared_for_reset = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+
         self._refresh_command()
+
+    def _initialize_from_dataset(self):
+        file_handler = self._env.recorder_manager._dataset_file_handler
+
+        if isinstance(file_handler, AppendHDF5DatasetFileHandler):
+            tasks_ids_pairs_dict = file_handler.get_executed_task_ids_with_pairs()
+            for id, pairs in tasks_ids_pairs_dict.items():
+                if len(pairs) == len(self._tasks_by_id[id].train + self._tasks_by_id[id].test):
+                    self.tasks_status[id] = TaskStatus.COMPLETED
+                if id in self.current_tasks:
+                    self._current_task_pair_position[self.current_tasks.index(id)] = len(pairs) - 1
+                    self.current_task_pair[self.current_tasks.index(id)] = pairs[-1]
 
     def _resolve_task_queue(self, task_ids: list[str] | None) -> list[str]:
         """Return the ordered, unique task IDs available to this command term."""
@@ -239,9 +253,10 @@ class LoadTaskCommand(CommandTerm):
         for env_id in env_ids_tensor.tolist():
             current_task_id = self.current_tasks[env_id]
             if self.tasks_status[current_task_id] == TaskStatus.FAILED:
-                self._retry_current_pair(env_id)
-                if self.retries_per_task[current_task_id] > self.cfg.retries:
+                if self.retries_per_task[current_task_id] >= self.cfg.retries:
                     self._transition_to_next_pair(env_id)
+                    continue
+                self._retry_current_pair(env_id)
             elif self.tasks_status[current_task_id] == TaskStatus.COMPLETED:
                 self._transition_to_next_pair(env_id)
 
@@ -272,7 +287,7 @@ class LoadTaskCommand(CommandTerm):
         """Transition to the next task for the given environment ID."""
         self.tasks_status[self.current_tasks[env_id]] = (
             TaskStatus.FAILED
-            if self.retries_per_task[self.current_tasks[env_id]] == TaskStatus.FAILED
+            if self.tasks_status[self.current_tasks[env_id]] == TaskStatus.FAILED
             else TaskStatus.COMPLETED
         )
         next_task_id = self._get_next_task_id()

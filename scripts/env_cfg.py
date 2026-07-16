@@ -1,12 +1,14 @@
 from argparse import Namespace
 from typing import cast
 
+from era_bench.tasks.manager_based.common.dataset_handler import AppendHDF5DatasetFileHandler
 from isaaclab_tasks.utils import parse_env_cfg
 import os
 from era_bench.tasks.manager_based.arc_embodied.era_bench_env_cfg import EraBenchEnvCfg
 from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import DatasetExportMode
+from isaaclab.utils.datasets.hdf5_dataset_file_handler import HDF5DatasetFileHandler
 from isaaclab_mimic.motion_planners.curobo.curobo_planner import CuroboPlanner, CuroboPlannerCfg
 from era_bench.curobo_planner_extended import ExtendedCuroboPlanner
 from isaaclab.assets.articulation import Articulation
@@ -35,6 +37,9 @@ def configure_env(args_cli: Namespace) -> ManagerBasedRLEnvCfg:
     env_cfg.recorders.dataset_export_dir_path = output_dir
     env_cfg.recorders.dataset_filename = output_file_name
     env_cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_FAILED_IN_SEPARATE_FILES
+    env_cfg.recorders.dataset_file_handler_class_type = (
+        HDF5DatasetFileHandler if args_cli.overwrite_dataset else AppendHDF5DatasetFileHandler
+    )
 
     return env_cfg
 

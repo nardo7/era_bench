@@ -41,4 +41,10 @@ def parse_arguments():
         default=False,
         help="Whether to print debug information.",
     )
+    parser.add_argument(
+        "--overwrite_dataset",
+        action="store_true",
+        default=False,
+        help="Whether to overwrite the dataset file if it already exists.",
+    )
     return parser

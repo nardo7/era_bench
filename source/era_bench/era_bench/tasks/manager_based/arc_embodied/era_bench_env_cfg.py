@@ -165,7 +165,7 @@ class CommandsCfg:
 
     load_task = mdp.LoadTaskCommandCfg(
         class_type=mdp.LoadTaskCommand,
-        retries=0,
+        retries=2,
     )
 
 
@@ -211,7 +211,6 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
     terminations: TerminationsCfg = TerminationsCfg()
     commands: CommandsCfg = CommandsCfg()
     recorders: mdp.ARCTaskRecorderManagerCfg = mdp.ARCTaskRecorderManagerCfg(sensor_name="table_cam")
-    store_videos: bool = MISSING  # pyright: ignore[reportAssignmentType]
 
     # Post initialization
     def __post_init__(self) -> None:
