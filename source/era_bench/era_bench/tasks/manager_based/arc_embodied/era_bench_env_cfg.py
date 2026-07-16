@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+from era_bench.tasks.manager_based.common.recorders import EpisodeVideoRecorderCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -70,9 +71,6 @@ class ObservationsCfg:
         actions = ObsTerm(func=mdp.last_action)
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        # object = ObsTerm(func=mdp.object_obs)
-        # cube_positions = ObsTerm(func=mdp.cube_positions_in_world_frame)
-        # cube_orientations = ObsTerm(func=mdp.cube_orientations_in_world_frame)
         eef_pos = ObsTerm(func=mdp.ee_frame_pos)
         eef_quat = ObsTerm(func=mdp.ee_frame_quat)
         gripper_pos = ObsTerm(func=mdp.gripper_pos)
@@ -96,26 +94,16 @@ class ObservationsCfg:
     class SubTasksCfg(ObsGroup):
         """Observations for sub-task groups."""
 
-        # object_grasped = ObsTerm(
-        #     func=mdp.objects_grasped,
-        #     params={
-        #         "robot_cfg": SceneEntityCfg("robot"),
-        #         "ee_frame_cfg": SceneEntityCfg("ee_frame"),
-        #     },
-        # )
-        # object_placed = ObsTerm(
-        #     func=mdp.objects_placed,
-        #     params={
-        #         "robot_cfg": SceneEntityCfg("robot"),
-        #         "ee_frame_cfg": SceneEntityCfg("ee_frame"),
-        #         "xy_threshold": 0.04,
-        #         "height_threshold": 0.005,
-        #     },
-        # )
+        object_grasped = ObsTerm(
+            func=mdp.objects_grasped,
+        )
+        object_placed = ObsTerm(
+            func=mdp.objects_placed,
+        )
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
-    # subtasks: SubTasksCfg = SubTasksCfg()
+    subtasks: SubTasksCfg = SubTasksCfg()
 
 
 @configclass
@@ -210,7 +198,9 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     commands: CommandsCfg = CommandsCfg()
-    recorders: mdp.ARCTaskRecorderManagerCfg = mdp.ARCTaskRecorderManagerCfg(sensor_name="table_cam")
+    recorders: mdp.ARCTaskRecorderManagerCfg = mdp.ARCTaskRecorderManagerCfg(
+        record_episode_video=EpisodeVideoRecorderCfg(sensor_name="table_cam")
+    )
 
     # Post initialization
     def __post_init__(self) -> None:

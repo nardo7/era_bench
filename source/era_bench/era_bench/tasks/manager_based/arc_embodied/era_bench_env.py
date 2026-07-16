@@ -20,8 +20,12 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
     cfg: EraBenchEnvCfg
     success_positions: SuccessPositionBuffer
     reserve_cube_stacks: ReserveCubeStackBuffer
+    reserve_cube_was_grasped: Tensor
 
     def __init__(self, cfg: EraBenchEnvCfg, **kwargs):
+        self.reserve_cube_was_grasped = torch.zeros(
+            (cfg.scene.num_envs, len(cfg.scene.reserve_cubes)), dtype=torch.bool, device=cfg.sim.device
+        )
         super().__init__(cfg, **kwargs)
         self.success_positions = SuccessPositionBuffer(
             num_envs=self.num_envs,
@@ -127,6 +131,7 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
         super()._reset_idx(env_ids)
         if hasattr(self, "_arm_pose_hold_active"):
             self._clear_arm_pose_hold()
+        self.reserve_cube_was_grasped[env_ids] = False
 
     def _log_joint_replay_debug(self, phase: str) -> None:
         robot: Articulation = self.scene["robot"]

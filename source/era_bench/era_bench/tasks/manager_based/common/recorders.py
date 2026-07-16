@@ -15,7 +15,7 @@ import torch
 
 from isaaclab.managers.recorder_manager import RecorderTerm, RecorderTermCfg
 from isaaclab.utils import configclass
-from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
+from isaaclab.envs.mdp.recorders import ActionStateRecorderManagerCfg
 
 
 class EpisodeVideoRecorder(RecorderTerm):
@@ -149,7 +149,3 @@ class RecorderManagerCfg(ActionStateRecorderManagerCfg):
     def set_store_videos(self, store_videos: bool) -> None:
         """Enable or disable video recording."""
         self.record_episode_video.store_videos = store_videos
-
-    def __init__(self, sensor_name: str = "tiled_camera", **kwds):
-        super().__init__(**kwds)
-        self.record_episode_video = EpisodeVideoRecorderCfg(sensor_name=sensor_name)
