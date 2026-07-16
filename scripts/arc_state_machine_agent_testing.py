@@ -193,16 +193,15 @@ def main():
     if not bool(torch.any(env.success_positions.has_targets)):
         raise RuntimeError("The current ARC task has no output objects to use as success targets.")
 
-    reserve_cube_stacks = env.get_reserve_cubes_poses_by_color()
     arc_sm = ArcStateMachine(
         dt=env_cfg.sim.dt * env_cfg.decimation,
         num_envs=env.num_envs,
         success_positions=env.success_positions,
         device=env.device,  # pyright: ignore[reportArgumentType]
         position_threshold=0.01,
-        reserve_cubes_poses=reserve_cube_stacks,
+        reserve_cube_stacks=env.reserve_cube_stacks,
         cube_sizes=scene_cfg.cubes_size,
-        cubes_per_stack=int(scene_cfg.reserve_cubes_amount_per_color / scene_cfg.reserve_cubes_amount_per_line),
+        cubes_per_stack=int(scene_cfg.reserve_cubes_amount_per_stack / scene_cfg.reserve_cubes_amount_per_line),
     )
     place_above_watchdog = ArcIKWatchdog(
         num_envs=env.num_envs,
@@ -247,9 +246,8 @@ def main():
                 ArcStates.APPROACHING_PLACING.python_value,
                 ArcStates.PLACING.python_value,
             ]:
-                color = arc_sm.get_current_goal_color(0)
-                reserve_cube_idx = arc_sm.get_current_stack_index(0)
-                cube_name = scene_cfg.get_reserve_cube_name(color, reserve_cube_idx)
+                stack_idx, cube_idx = arc_sm.get_current_cube_slot(0)
+                cube_name = scene_cfg.get_reserve_cube_name(stack_idx, cube_idx)
                 planner.set_expected_attached_object(cube_name)
             else:
                 planner.set_expected_attached_object(None)
@@ -316,6 +314,7 @@ def main():
             place_above_recovery.reset(done_env_ids)
             recovery_active_mask[done_env_ids] = False
             arc_sm.reset_idx(torch.where(dones)[0].tolist())
+            arc_sm.update_reserve_cube_stacks(env.reserve_cube_stacks, done_env_ids)
             arc_sm.update_success_positions(env.success_positions, done_env_ids)
             env.scene.reset(torch.where(dones)[0].tolist())
 

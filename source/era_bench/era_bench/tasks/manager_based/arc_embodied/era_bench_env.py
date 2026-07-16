@@ -4,15 +4,14 @@ from typing import Any, cast
 from torch import Tensor
 import torch
 
-from arc_utils import Colors
 from isaaclab.envs import ManagerBasedRLMimicEnv
 from .era_bench_env_cfg import EraBenchEnvCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.assets import Articulation, RigidObject
 import isaaclab.utils.math as math_utils
 
-from .mdp.commands import MAX_OBJECTS_PER_GRID
-from .success_positions import SuccessPositionBuffer
+from .mdp.commands import MAX_OUTPUT_OBJECTS_PER_GRID
+from .success_positions import ReserveCubeStackBuffer, SuccessPositionBuffer
 
 
 class EraBenchEnv(ManagerBasedRLMimicEnv):
@@ -20,12 +19,19 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
 
     cfg: EraBenchEnvCfg
     success_positions: SuccessPositionBuffer
+    reserve_cube_stacks: ReserveCubeStackBuffer
 
     def __init__(self, cfg: EraBenchEnvCfg, **kwargs):
         super().__init__(cfg, **kwargs)
         self.success_positions = SuccessPositionBuffer(
             num_envs=self.num_envs,
-            max_targets=MAX_OBJECTS_PER_GRID,
+            max_targets=MAX_OUTPUT_OBJECTS_PER_GRID,
+            device=self.device,
+        )
+        self.reserve_cube_stacks = ReserveCubeStackBuffer(
+            num_envs=self.num_envs,
+            num_stacks=cfg.scene.reserve_stacks_amount,
+            cubes_per_stack=cfg.scene.reserve_cubes_amount_per_stack,
             device=self.device,
         )
         self._arm_pose_hold_active = False
@@ -90,7 +96,6 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
         self._held_arm_pose_action = arm_action.clone()
         self._held_arm_joint_targets = robot.data.joint_pos[:, arm_joint_ids].clone()
         self._arm_pose_hold_active = True
-        print("[INFO]: Latched hard arm hold at stationary pose.")
         return True
 
     def step(self, action: Tensor):
@@ -285,58 +290,18 @@ class EraBenchEnv(ManagerBasedRLMimicEnv):
         entities = [SceneEntityCfg(name) for name in reserve_cube_names]
         return [self.scene[entity.name] for entity in entities]
 
-    def get_reserve_cubes_by_color(self) -> dict[Colors, list[RigidObject]]:
-        """Get the reserve cubes grouped by color."""
-        reserve_cubes = self.get_reserve_cubes()
-        cubes_by_color: dict[Colors, list[RigidObject]] = {}
-        for cube in reserve_cubes:
-            color = self.cfg.scene.get_reserve_cube_color(cube.body_names[0])
-            if color not in cubes_by_color:
-                cubes_by_color[color] = []
-            cubes_by_color[color].append(cube)
-        return cubes_by_color
-
-    def get_reserve_cubes_positions(self) -> list[Tensor]:
-        """Get the positions of the reserve cubes."""
-        reserve_cubes = self.get_reserve_cubes()
-        return [cube.data.root_link_pos_w for cube in reserve_cubes]
-
-    def _stack_env_major(self, tensors: list[Tensor], value_dim: int) -> Tensor:
-        """Stack per-cube tensors into shape (num_envs, num_cubes, value_dim)."""
-        if not tensors:
-            return torch.empty((self.num_envs, 0, value_dim), device=self.device)
-
-        sample = tensors[0]
-        if sample.ndim == 1:
-            stacked = torch.stack(tensors, dim=0)
-            return stacked.unsqueeze(0)
-
-        if sample.ndim == 2:
-            if sample.shape[0] == self.num_envs:
-                return torch.stack(tensors, dim=1)
-            if sample.shape[1] == value_dim:
-                stacked = torch.stack(tensors, dim=0)
-                return stacked.unsqueeze(0)
-
-        raise ValueError(
-            f"Unexpected reserve cube tensor shape {tuple(sample.shape)}; expected ({self.num_envs}, {value_dim}) or ({value_dim},)."
-        )
-
-    def get_reserve_cubes_positions_by_color(self) -> dict[Colors, Tensor]:
-        """Get the positions of the reserve cubes grouped by color."""
-        reserve_cubes_by_color = self.get_reserve_cubes_by_color()
-        positions_by_color: dict[Colors, Tensor] = {}
-        for color, cubes in reserve_cubes_by_color.items():
-            positions_by_color[color] = self._stack_env_major([cube.data.root_link_pos_w for cube in cubes], 3)
-        return positions_by_color
-
-    def get_reserve_cubes_poses_by_color(self) -> dict[Colors, Tensor]:
-        """Get the live reserve cube poses grouped by color as (x, y, z, qw, qx, qy, qz)."""
-        reserve_cubes_by_color = self.get_reserve_cubes_by_color()
-        poses_by_color: dict[Colors, Tensor] = {}
-        for color, cubes in reserve_cubes_by_color.items():
-            poses_by_color[color] = self._stack_env_major(
-                [torch.cat([cube.data.root_link_pos_w, cube.data.root_quat_w], dim=-1) for cube in cubes],
-                7,
+    def get_live_reserve_cube_stack_poses(self) -> Tensor:
+        """Return live reserve poses in physical stack order, not grouped by color."""
+        scene_cfg = self.cfg.scene
+        poses = []
+        for stack_index in range(scene_cfg.reserve_stacks_amount):
+            cubes = [
+                self.scene[scene_cfg.get_reserve_cube_name(stack_index, cube_index)]
+                for cube_index in range(scene_cfg.reserve_cubes_amount_per_stack)
+            ]
+            poses.append(
+                torch.stack(
+                    [torch.cat((cube.data.root_link_pos_w, cube.data.root_quat_w), dim=-1) for cube in cubes], dim=1
+                )
             )
-        return poses_by_color
+        return torch.stack(poses, dim=1)

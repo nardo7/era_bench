@@ -6,10 +6,10 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.sensors import TiledCameraCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
+from isaaclab.sim.utils import get_current_stage
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG, FRANKA_PANDA_CFG  # isort: skip
-from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, DEFAULT_COLORS, Colors
-import torch
+from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, Colors
 
 FRANKA_GRASP_CENTER_OFFSET = (0.0, 0.0, 0.1034)
 
@@ -114,8 +114,12 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
 
     @property
     def reserve_cubes(self) -> list[str]:
-        """Names of cube objects currently registered in this scene config."""
-        return sorted(k for k in self.__dict__ if k.startswith("reserve_cube_"))
+        """Neutral reserve-cube names in physical stack order."""
+        return [
+            self.get_reserve_cube_name(stack_index, cube_index)
+            for stack_index in range(self.reserve_stacks_amount)
+            for cube_index in range(self.reserve_cubes_amount_per_stack)
+        ]
 
     @property
     def input_grid_cubes(self) -> list[str]:
@@ -123,9 +127,9 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         return sorted(k for k in self.__dict__ if k.startswith("input_grid_cube_"))
 
     @property
-    def colors_amount(self) -> int:
-        """Number of colors used for cubes in this scene config."""
-        return 2
+    def reserve_stacks_amount(self) -> int:
+        """Number of physical reserve stacks available in every environment."""
+        return 4
 
     @property
     def cubes_size(self) -> tuple[float, float, float]:
@@ -138,14 +142,29 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         return 0.02  # in meters
 
     @property
-    def reserve_cubes_amount_per_color(self) -> int:
-        """Number of reserve cubes used per color in this scene config."""
-        return 9
+    def reserve_cubes_amount_per_stack(self) -> int:
+        """Number of cubes in each physical reserve stack."""
+        return 12
 
     @property
     def reserve_cubes_amount_per_line(self) -> int:
         """Number of reserve cubes used per line in this scene config."""
-        return 3
+        return 4
+
+    @property
+    def reserve_stack_x_local(self) -> float:
+        """Common local x coordinate of all reserve-stack starting points."""
+        return 0.30
+
+    @property
+    def reserve_stack_y_start_local(self) -> float:
+        """Local y coordinate of the first reserve-stack starting point."""
+        return -0.1
+
+    @property
+    def reserve_stack_y_spacing(self) -> float:
+        """Local y spacing between reserve stacks."""
+        return 0.2
 
     @property
     def input_grid_cubes_amount_per_color(self) -> int:
@@ -167,6 +186,20 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         """Local position of the center of the output grid in this scene config."""
         return (0.0, 0.5, 0.00)  # (x, y, z) in meters
 
+    def get_reserve_stack_start_local(self, stack_index: int) -> tuple[float, float]:
+        """Return the local starting position of a physical reserve stack."""
+        if not 0 <= stack_index < self.reserve_stacks_amount:
+            raise ValueError(f"Invalid reserve stack index: {stack_index}")
+        return (
+            self.reserve_stack_x_local
+            + (
+                self.reserve_cubes_amount_per_line
+                * (self.cubes_size[0] + self.separation_distance)
+                * int(stack_index / 2 % 2)
+            ),
+            self.reserve_stack_y_start_local + (stack_index % 2) * self.reserve_stack_y_spacing,
+        )
+
     def get_input_grid_cubes_amount(self, arc_color: int) -> int:
         """Return the number of pooled input-grid cubes available for an ARC colour ID."""
         if arc_color not in ARC_COLOR_TO_COLOR:
@@ -178,20 +211,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     def _cube_visual_material(self, color: Colors) -> sim_utils.PreviewSurfaceCfg:
         return sim_utils.PreviewSurfaceCfg(diffuse_color=COLOR_RGB[color])
 
-    def change_reserve_cubes_colors(self, colors: list[Colors] = DEFAULT_COLORS) -> None:
-        if len(colors) < self.colors_amount:
-            raise ValueError(f"Expected at least {self.colors_amount} colors, got {len(colors)}")
-
-        for cube_name in self.reserve_cubes:
-            parts = cube_name.split("_")
-            if len(parts) < 4:
-                continue
-
-            color_idx = int(parts[2])
-            cube_cfg = getattr(self, cube_name)
-            cube_cfg.spawn.visual_material = self._cube_visual_material(colors[color_idx])
-
-    def initialize_reserve_cubes(self, colors: list[Colors] = DEFAULT_COLORS) -> None:
+    def initialize_reserve_cubes(self) -> None:
 
         reserve_cube_rigid_props = sim_utils.RigidBodyPropertiesCfg(
             solver_position_iteration_count=16,
@@ -208,10 +228,11 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         reserve_cube_mass_props = sim_utils.MassPropertiesCfg(
             mass=0.08,
         )
-        # init reserve cubes
-        for color_idx in range(self.colors_amount):
-            for i in range(self.reserve_cubes_amount_per_color):
-                cube_name = f"reserve_cube_{colors[color_idx].value}_{i+1}"
+        # Reserve assets have stable, color-agnostic identities. Reset events
+        # assign their per-environment colors and poses.
+        for stack_index in range(self.reserve_stacks_amount):
+            for cube_index in range(self.reserve_cubes_amount_per_stack):
+                cube_name = self.get_reserve_cube_name(stack_index, cube_index)
                 setattr(
                     self,
                     cube_name,
@@ -223,7 +244,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                             rigid_props=reserve_cube_rigid_props,
                             collision_props=reserve_cube_collision_props,
                             mass_props=reserve_cube_mass_props,
-                            visual_material=self._cube_visual_material(colors[color_idx]),
+                            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.2, 0.2)),
                         ),
                     ),
                 )
@@ -253,42 +274,23 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                     ),
                 )
 
-    def get_reserve_cube_poses(self) -> list[tuple[float, float, float, float, float, float, float]]:
-        """Get the poses of all reserve cubes in this scene config."""
-        poses = []
-        for cube_name in self.reserve_cubes:
-            cube_cfg: RigidObjectCfg = getattr(self, cube_name)
-            poses.append(cube_cfg.init_state.pos + cube_cfg.init_state.rot)
-        return poses
+    def get_reserve_cube_name(self, stack_index: int, cube_index: int) -> str:
+        """Return a stable neutral reserve-cube name from physical indices."""
+        if not 0 <= stack_index < self.reserve_stacks_amount:
+            raise ValueError(f"Invalid reserve stack index: {stack_index}")
+        if not 0 <= cube_index < self.reserve_cubes_amount_per_stack:
+            raise ValueError(f"Invalid reserve cube index: {cube_index}")
+        slot_index = stack_index * self.reserve_cubes_amount_per_stack + cube_index
+        return f"reserve_cube_{slot_index:02d}"
 
-    def get_reserve_cube_colors(self) -> list[Colors]:
-        """Get the colors of all reserve cubes in this scene config."""
-        colors = []
-        for cube_name in self.reserve_cubes:
-            parts = cube_name.split("_")
-            if len(parts) < 4:
-                continue
-            colors.append(Colors(parts[2]))
-        return colors
-
-    def get_reserve_cube_stacks(self) -> dict[Colors, torch.Tensor]:
-        """Get the poses of all reserve cubes in this scene config, grouped by color."""
-        stacks = {}
-        cube_poses = self.get_reserve_cube_poses()
-        names = self.reserve_cubes
-        cube_colors = self.get_reserve_cube_colors()
-
-        name_color_pose = list(zip(names, cube_colors, cube_poses))
-        sorted_by_idx = sorted(name_color_pose, key=lambda x: int(x[0].split("_")[-1]))
-        ordered_colors = [color for color in DEFAULT_COLORS if color in cube_colors]
-        for color in ordered_colors:
-            stacks[color] = torch.tensor([pose for _, c, pose in sorted_by_idx if c == color])
-
-        return stacks
-
-    def get_reserve_cube_name(self, color: Colors, index: int) -> str:
-        """Get the name of a reserve cube given its color and index."""
-        return f"reserve_cube_{color.value}_{index+1}"
+    def get_reserve_cube_shader(self, env_id: int, stack_index: int, cube_index: int):
+        """Return the shader prim for one environment-local reserve cube."""
+        cube_name = self.get_reserve_cube_name(stack_index, cube_index)
+        shader_path = f"/World/envs/env_{env_id}/{cube_name}/geometry/material/Shader"
+        shader = get_current_stage().GetPrimAtPath(shader_path)
+        if not shader.IsValid():
+            raise RuntimeError(f"Reserve cube shader does not exist: {shader_path}")
+        return shader
 
     def get_input_grid_cube_name(self, arc_color: int, index: int) -> str:
         """Return the pooled input-cube name for an ARC colour ID and zero-based slot."""
@@ -300,13 +302,6 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                 f"Input-grid cube index {index} exceeds the pool size " f"({pool_size}) for ARC colour {arc_color}."
             )
         return f"input_grid_cube_{ARC_COLOR_TO_COLOR[arc_color].value}_{index+1}"
-
-    def get_reserve_cube_color(self, cube_name: str) -> Colors:
-        """Get the color of a reserve cube given its name."""
-        parts = cube_name.split("_")
-        if len(parts) < 4:
-            raise ValueError(f"Invalid reserve cube name: {cube_name}")
-        return Colors(parts[2])
 
     def __post_init__(self):
         self.initialize_reserve_cubes()

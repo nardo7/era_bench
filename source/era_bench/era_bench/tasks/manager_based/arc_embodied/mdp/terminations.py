@@ -146,46 +146,38 @@ def are_objects_in_success_positions(
     environment's current ARC output; the remaining slots are ignored. For each
     ARC color, this function selects the active slots of that color, compares
     them with reserve cubes of the same color, and combines the result across
-    all colors. The TCP must also be more than 5cm away from every target before
-    the task is considered complete.
+    all colors. An output with no active targets is already complete. Otherwise,
+    the TCP must also be more than 5cm away from every target before the task is
+    considered complete.
     """
     scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
     del scene_cfg  # Kept for parity with other terminations and typing context.
 
     success_positions = env.success_positions
-    if not torch.any(success_positions.has_targets):
-        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-
-    reserve_cubes_by_color = env.get_reserve_cubes_positions_by_color()
-    success_mask = success_positions.has_targets.clone()
+    live_reserve_positions = env.get_live_reserve_cube_stack_poses()[..., :3]
+    stack_color_ids = env.reserve_cube_stacks.color_ids
+    success_mask = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
 
     # All values are world-frame positions: destination targets, reserve cubes,
     # and the TCP frame are directly comparable for every environment.
     ee_frame_sensor: FrameTransformer = env.scene["ee_frame"]
     tcp_position_w = ee_frame_sensor.data.target_pos_w[..., 0, :].clone()
 
-    for color in ARC_COLOR_TO_COLOR.values():
+    for arc_color_id, color in ARC_COLOR_TO_COLOR.items():
         color_target_slots = success_positions.color_mask(color)
         num_targets = color_target_slots.sum(dim=1)
         if not torch.any(num_targets):
             continue
 
-        reserve_positions_raw = reserve_cubes_by_color.get(color)
-        if reserve_positions_raw is None:
-            # A task requiring a color not present in the reserve stacks cannot
-            # succeed in the environments that contain that color.
-            success_mask &= num_targets == 0
-            continue
-
-        reserve_positions = reserve_positions_raw[..., :3]
-        num_reserve = reserve_positions.shape[1]
-        if num_reserve == 0:
-            success_mask &= num_targets == 0
-            continue
+        matching_stacks = stack_color_ids == arc_color_id
+        reserve_positions = live_reserve_positions.flatten(start_dim=1, end_dim=2)
+        matching_cubes = matching_stacks.unsqueeze(-1).expand_as(live_reserve_positions[..., 0]).flatten(start_dim=1)
+        num_reserve = matching_cubes.sum(dim=1)
 
         # Pairwise distances: [environment, target slot, reserve cube]. Slots
         # belonging to other colors are filtered out below.
         distances = torch.cdist(success_positions.positions_w, reserve_positions, p=2)
+        distances = torch.where(matching_cubes.unsqueeze(1), distances, torch.full_like(distances, torch.inf))
         closest_distances = torch.min(distances, dim=2).values
         target_is_reached = closest_distances <= distance_threshold
         non_color_slots_are_ignored = torch.ones_like(target_is_reached)

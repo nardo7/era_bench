@@ -9,7 +9,7 @@ import torch
 from arc_utils import ARC_COLOR_TO_COLOR, Colors as ArcColors
 
 if TYPE_CHECKING:
-    from .success_positions import SuccessPositionBuffer
+    from .success_positions import ReserveCubeStackBuffer, SuccessPositionBuffer
 
 
 NUM_ARC_COLORS = max(ARC_COLOR_TO_COLOR) + 1
@@ -78,22 +78,18 @@ ARC_STATE_RETREATING_PLACING_ABOVE = ArcStates.RETREATING_PLACING_ABOVE.warp_val
 
 @wp.func
 def get_next_reserve_cube(
-    next_idx: int, reserve_cube_stack: wp.array(dtype=wp.transform), num_reserve_cubes: int
+    env_id: int,
+    stack_idx: int,
+    next_idx: int,
+    reserve_cubes_positions: wp.array3d(dtype=wp.transform),
+    num_reserve_cubes: int,
 ) -> wp.transform:
     """Destack the next reserve cube index from the stack."""
     if next_idx < 0:
         next_idx = num_reserve_cubes - 1
     if next_idx >= num_reserve_cubes:
         next_idx = 0
-    return reserve_cube_stack[next_idx]
-
-
-@wp.func
-def get_reserve_cube_stack(
-    env_id: int, color_idx: int, reserve_cubes_positions: wp.array3d(dtype=wp.transform)
-) -> wp.array(dtype=wp.transform):
-    """Get the reserve cube stack for a given environment and color."""
-    return reserve_cubes_positions[env_id, color_idx]
+    return reserve_cubes_positions[env_id, stack_idx, next_idx]
 
 
 @wp.func
@@ -132,9 +128,13 @@ def arc_state_machine_kernel(
     sm_state: wp.array(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     sm_wait_time: wp.array(dtype=float),  # pyright: ignore[reportInvalidTypeForm]
     ee_pose: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
+    rest_pose: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
+    rest_pose_initialized: wp.array(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     desired_goal_poses: wp.array2d(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     num_desired_goal_poses: wp.array(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     reserve_cube_poses_stacks: wp.array3d(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
+    reserve_cubes_per_stack: int,
+    color_to_stack: wp.array2d(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     goal_arc_color_ids: wp.array2d(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     des_ee_pose: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     des_gripper_state: wp.array(dtype=float),  # pyright: ignore[reportInvalidTypeForm]
@@ -143,16 +143,35 @@ def arc_state_machine_kernel(
     retreat_offset_reserve: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     retreat_from_position: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     current_goal_objects: wp.array(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
-    reserve_cube_poses_idx_wp: wp.array2d(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
+    reserve_cube_indices: wp.array2d(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     position_threshold: float,
 ):
     tid = wp.tid()
 
     state = sm_state[tid]
     num_desired_goals = num_desired_goal_poses[tid]
+
+    # An empty ARC output is already successful. Keep its state machine in a
+    # safe REST state until the environment processes the success termination.
+    # This guard must precede every target/stack lookup below.
+    if num_desired_goals == 0:
+        sm_state[tid] = ARC_STATE_REST
+        sm_wait_time[tid] = 0.0
+        if rest_pose_initialized[tid] == 0:
+            rest_pose[tid] = ee_pose[tid]
+            rest_pose_initialized[tid] = 1
+        des_gripper_state[tid] = GripperState.OPEN
+        des_ee_pose[tid] = rest_pose[tid]
+        return
+
+    if state == ARC_STATE_REST and rest_pose_initialized[tid] == 0:
+        rest_pose[tid] = ee_pose[tid]
+        rest_pose_initialized[tid] = 1
+
     current_goal_object_idx = current_goal_objects[tid]
     goal_color_id = goal_arc_color_ids[tid, current_goal_object_idx]
-    reserve_cube_idx = reserve_cube_poses_idx_wp[tid, goal_color_id]
+    stack_idx = color_to_stack[tid, goal_color_id]
+    reserve_cube_idx = reserve_cube_indices[tid, stack_idx]
     # Get state configuration
     state_wait_time, next_state = get_state_config(state)
 
@@ -197,17 +216,16 @@ def arc_state_machine_kernel(
 
     if state == ARC_STATE_PLACING and condition:
         current_goal_objects[tid] = (current_goal_object_idx + 1) % num_desired_goals
-        reserve_cube_poses_idx_wp[tid, goal_color_id] = reserve_cube_idx - 1
+        reserve_cube_indices[tid, stack_idx] = reserve_cube_idx - 1
 
     if state == ARC_STATE_REST:
         des_gripper_state[tid] = GripperState.OPEN
-        des_ee_pose[tid] = ee_pose[tid]
+        des_ee_pose[tid] = rest_pose[tid]
 
     elif state == ARC_STATE_APPROACHING_ABOVE:
         des_gripper_state[tid] = GripperState.OPEN
-        current_stack = get_reserve_cube_stack(tid, goal_color_id, reserve_cube_poses_stacks)
         object_position = wp.transform_get_translation(
-            get_next_reserve_cube(reserve_cube_idx, current_stack, wp.len(current_stack))
+            get_next_reserve_cube(tid, stack_idx, reserve_cube_idx, reserve_cube_poses_stacks, reserve_cubes_per_stack)
         )
         desired_grasp_orientation = wp.transform_get_rotation(desired_goal_poses[tid, current_goal_object_idx])
         approach_pose = wp.transform(object_position, desired_grasp_orientation)
@@ -215,9 +233,8 @@ def arc_state_machine_kernel(
 
     elif state == ARC_STATE_APPROACHING:
         des_gripper_state[tid] = GripperState.OPEN
-        current_stack = get_reserve_cube_stack(tid, goal_color_id, reserve_cube_poses_stacks)
         object_position = wp.transform_get_translation(
-            get_next_reserve_cube(reserve_cube_idx, current_stack, wp.len(current_stack))
+            get_next_reserve_cube(tid, stack_idx, reserve_cube_idx, reserve_cube_poses_stacks, reserve_cubes_per_stack)
         )
         desired_grasp_orientation = wp.transform_get_rotation(desired_goal_poses[tid, current_goal_object_idx])
         approach_pose = wp.transform(object_position, desired_grasp_orientation)
@@ -254,13 +271,13 @@ def arc_state_machine_kernel(
 class ArcStateMachine:
 
     @staticmethod
-    def _validate_pose_tensor_shape(name: str, tensor: torch.Tensor, num_envs: int) -> None:
-        if tensor.ndim != 3:
-            raise ValueError(f"Expected {name} to have shape (num_envs, N, 7), got ndim={tensor.ndim}")
+    def _validate_stack_pose_tensor_shape(name: str, tensor: torch.Tensor, num_envs: int) -> None:
+        if tensor.ndim != 4:
+            raise ValueError(f"Expected {name} to have shape (num_envs, stacks, cubes, 7), got ndim={tensor.ndim}")
         if tensor.shape[0] != num_envs:
             raise ValueError(f"Expected {name}.shape[0] == num_envs ({num_envs}), got {tensor.shape[0]}")
-        if tensor.shape[2] != 7:
-            raise ValueError(f"Expected {name}.shape[2] == 7, got {tensor.shape[2]}")
+        if tensor.shape[3] != 7:
+            raise ValueError(f"Expected {name}.shape[3] == 7, got {tensor.shape[3]}")
 
     @staticmethod
     def _log_shape(name: str, tensor: torch.Tensor) -> None:
@@ -268,16 +285,14 @@ class ArcStateMachine:
 
     @staticmethod
     def _convert_pose_tensor_for_warp(pose_tensor: torch.Tensor) -> torch.Tensor:
-        return pose_tensor[:, :, [0, 1, 2, 4, 5, 6, 3]]  # convert from (w, x, y, z) to (x, y, z, w) for warp kernel use
+        return pose_tensor[:, :, :, [0, 1, 2, 4, 5, 6, 3]]  # convert from (w, x, y, z) to Warp ordering
 
     def __init__(
         self,
         dt: float,
         num_envs: int,
         success_positions: SuccessPositionBuffer,
-        reserve_cubes_poses: dict[
-            ArcColors, torch.Tensor
-        ],  # color -> (num_envs, num_reserve_cubes, 7) tensor of reserve cube positions
+        reserve_cube_stacks: ReserveCubeStackBuffer,
         cube_sizes: tuple[float, float, float],
         cubes_per_stack: int,
         device: torch.device = torch.device("cpu"),
@@ -296,21 +311,12 @@ class ArcStateMachine:
             raise ValueError(
                 f"Expected success positions for {self.num_envs} environments, got {success_positions.num_envs}."
             )
-        for color_name, pose_tensor in reserve_cubes_poses.items():
-            self._validate_pose_tensor_shape(f"reserve_cubes_poses[{color_name}]", pose_tensor, self.num_envs)
-
-        if self.debug_shapes:
-            for color_name, pose_tensor in reserve_cubes_poses.items():
-                self._log_shape(f"reserve_cubes_poses[{color_name}]", pose_tensor)
-
-        if not reserve_cubes_poses:
-            raise ValueError("Expected reserve cube poses for at least one ARC color.")
-        num_reserve_cubes = next(iter(reserve_cubes_poses.values())).shape[1]
-        if any(poses.shape[1] != num_reserve_cubes for poses in reserve_cubes_poses.values()):
-            raise ValueError("All ARC reserve color stacks must contain the same number of cubes.")
-        self.available_arc_color_ids = tuple(
-            arc_color for arc_color, color in ARC_COLOR_TO_COLOR.items() if color in reserve_cubes_poses
-        )
+        if reserve_cube_stacks.num_envs != self.num_envs:
+            raise ValueError("Reserve stack buffer has a different number of environments.")
+        self._validate_stack_pose_tensor_shape("reserve_cube_stacks.poses_w", reserve_cube_stacks.poses_w, self.num_envs)
+        self.num_stacks = reserve_cube_stacks.num_stacks
+        num_reserve_cubes = reserve_cube_stacks.cubes_per_stack
+        self.num_reserve_cubes = num_reserve_cubes
 
         # Goals are environment-major and use Warp quaternion ordering
         # ``(x, y, z, qx, qy, qz, qw)``. ARC color IDs remain unchanged.
@@ -323,21 +329,14 @@ class ArcStateMachine:
         )
         self.dest_counts = torch.zeros((self.num_envs,), dtype=torch.int32, device=device)
 
-        # Reserve stacks use their canonical ARC IDs as their second tensor
-        # dimension. A goal with ARC blue ID 1 therefore reads stack 1 directly.
-        reserve_cubes_stacked = torch.zeros(
-            (self.num_envs, NUM_ARC_COLORS, num_reserve_cubes, 7), dtype=torch.float32, device=device
+        self.reserve_cube_poses = torch.zeros(
+            (self.num_envs, self.num_stacks, num_reserve_cubes, 7), dtype=torch.float32, device=device
         )
-        reserve_cubes_stacked[:, :, :, 6] = 1.0
-        for arc_color, color in ARC_COLOR_TO_COLOR.items():
-            reserve_poses = reserve_cubes_poses.get(color)
-            if reserve_poses is not None:
-                reserve_cubes_stacked[:, arc_color] = self._convert_pose_tensor_for_warp(reserve_poses).to(device)
-
-        print(f"[INFO]: Reserve cube poses: {reserve_cubes_poses}")
+        self.reserve_cube_poses[..., 6] = 1.0
+        self.color_to_stack = torch.full((self.num_envs, NUM_ARC_COLORS), -1, dtype=torch.int32, device=device)
         self.initial_stack_idx = num_reserve_cubes - 1
-        self.reserve_cube_poses_idx = torch.full(
-            (self.num_envs, NUM_ARC_COLORS),
+        self.reserve_cube_indices = torch.full(
+            (self.num_envs, self.num_stacks),
             self.initial_stack_idx,
             dtype=torch.int32,
             device=device,
@@ -348,7 +347,11 @@ class ArcStateMachine:
         self.sm_state = torch.full((self.num_envs,), ArcStates.REST.python_value, dtype=torch.int32, device=device)
         self.sm_wait_time = torch.zeros((self.num_envs,), device=device)
         self.current_idx_objects = torch.full((self.num_envs,), 0, dtype=torch.int32, device=device)
+        self.rest_pose = torch.zeros((self.num_envs, 7), dtype=torch.float32, device=device)
+        self.rest_pose[:, -1] = 1.0
+        self.rest_pose_initialized = torch.zeros((self.num_envs,), dtype=torch.int32, device=device)
 
+        self.update_reserve_cube_stacks(reserve_cube_stacks)
         self.update_success_positions(success_positions)
 
         # desired state
@@ -377,6 +380,8 @@ class ArcStateMachine:
         self.sm_dt_wp = wp.from_torch(self.sm_dt, wp.float32)
         self.sm_state_wp = wp.from_torch(self.sm_state, wp.int32)
         self.sm_wait_time_wp = wp.from_torch(self.sm_wait_time, wp.float32)
+        self.rest_pose_wp = wp.from_torch(self.rest_pose, wp.transform)
+        self.rest_pose_initialized_wp = wp.from_torch(self.rest_pose_initialized, wp.int32)
         self.des_ee_pose_wp = wp.from_torch(self.des_ee_pose, wp.transform)
         self.des_gripper_state_wp = wp.from_torch(self.des_gripper_state, wp.float32)
         self.offset_wp = wp.from_torch(self.offset, wp.transform)
@@ -385,8 +390,9 @@ class ArcStateMachine:
         self.dest_poses_wp = wp.from_torch(self.dest_poses, wp.transform)
         self.dest_counts_wp = wp.from_torch(self.dest_counts, wp.int32)
         self.dest_arc_color_ids_wp = wp.from_torch(self.dest_arc_color_ids, wp.int32)
-        self.reserve_cubes_poses_wp = wp.from_torch(reserve_cubes_stacked, wp.transform)
-        self.reserve_cube_poses_idx_wp = wp.from_torch(self.reserve_cube_poses_idx, wp.int32)
+        self.reserve_cubes_poses_wp = wp.from_torch(self.reserve_cube_poses, wp.transform)
+        self.color_to_stack_wp = wp.from_torch(self.color_to_stack, wp.int32)
+        self.reserve_cube_indices_wp = wp.from_torch(self.reserve_cube_indices, wp.int32)
         self.retreat_offset_reserve_wp = wp.from_torch(self.retreat_offset_reserve, wp.transform)
         self.retreat_from_position_wp = wp.from_torch(self.retreat_from_position, wp.transform)
 
@@ -394,14 +400,14 @@ class ArcStateMachine:
             self._log_shape("dest_poses_warp_order", self.dest_poses)
             self._log_shape("dest_counts", self.dest_counts)
             self._log_shape("dest_arc_color_ids", self.dest_arc_color_ids)
-            self._log_shape("reserve_cube_poses_idx", self.reserve_cube_poses_idx)
-            self._log_shape("reserve_cubes_stacked_warp_order", reserve_cubes_stacked)
+            self._log_shape("reserve_cube_indices", self.reserve_cube_indices)
+            self._log_shape("reserve_cubes_stacked_warp_order", self.reserve_cube_poses)
             print(f"[INFO]: sm_state_wp shape={self.sm_state_wp.shape}")
             print(f"[INFO]: sm_wait_time_wp shape={self.sm_wait_time_wp.shape}")
             print(f"[INFO]: dest_poses_wp shape={self.dest_poses_wp.shape}")
             print(f"[INFO]: dest_arc_color_ids_wp shape={self.dest_arc_color_ids_wp.shape}")
             print(f"[INFO]: reserve_cubes_poses_wp shape={self.reserve_cubes_poses_wp.shape}")
-            print(f"[INFO]: reserve_cube_poses_idx_wp shape={self.reserve_cube_poses_idx_wp.shape}")
+            print(f"[INFO]: reserve_cube_indices_wp shape={self.reserve_cube_indices_wp.shape}")
 
     def update_success_positions(
         self,
@@ -427,12 +433,9 @@ class ArcStateMachine:
 
         active_targets = success_positions.active_targets[env_ids_tensor].to(self.device)
         arc_color_ids = success_positions.color_ids[env_ids_tensor].to(self.device)
-        available_arc_color_ids = torch.tensor(
-            self.available_arc_color_ids,
-            device=self.device,
-            dtype=arc_color_ids.dtype,
-        )
-        missing_reserve_stacks = active_targets & ~torch.isin(arc_color_ids, available_arc_color_ids)
+        color_to_stack = self.color_to_stack[env_ids_tensor].to(device=self.device)
+        stack_indices = torch.gather(color_to_stack, 1, arc_color_ids.to(dtype=torch.long))
+        missing_reserve_stacks = active_targets & (stack_indices < 0)
         if torch.any(missing_reserve_stacks):
             missing_arc_color_ids = torch.unique(arc_color_ids[missing_reserve_stacks]).tolist()
             raise ValueError(
@@ -448,6 +451,29 @@ class ArcStateMachine:
             device=self.device, dtype=self.dest_counts.dtype
         )
 
+    def update_reserve_cube_stacks(
+        self,
+        reserve_cube_stacks: ReserveCubeStackBuffer,
+        env_ids: Sequence[int] | torch.Tensor | None = None,
+    ) -> None:
+        """Copy reset-time physical stack poses and color mappings into the SM."""
+        if reserve_cube_stacks.num_envs != self.num_envs:
+            raise ValueError("Reserve stack buffer has a different number of environments.")
+        if reserve_cube_stacks.poses_w.shape != (self.num_envs, self.num_stacks, self.initial_stack_idx + 1, 7):
+            raise ValueError("Reserve stack buffer shape does not match this state machine.")
+        if env_ids is None:
+            env_ids_tensor = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        else:
+            env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        if env_ids_tensor.numel() == 0:
+            return
+        self.reserve_cube_poses[env_ids_tensor] = self._convert_pose_tensor_for_warp(
+            reserve_cube_stacks.poses_w[env_ids_tensor]
+        ).to(self.device)
+        self.color_to_stack[env_ids_tensor] = reserve_cube_stacks.color_to_stack[env_ids_tensor].to(
+            device=self.device, dtype=self.color_to_stack.dtype
+        )
+
     def advance(self, executed_steps: int) -> None:
         if executed_steps <= 0:
             return
@@ -459,7 +485,8 @@ class ArcStateMachine:
         self.sm_state[env_ids] = ArcStates.REST.python_value
         self.sm_wait_time[env_ids] = 0.0
         self.current_idx_objects[env_ids] = 0
-        self.reserve_cube_poses_idx[env_ids, :] = self.initial_stack_idx
+        self.rest_pose_initialized[env_ids] = 0
+        self.reserve_cube_indices[env_ids, :] = self.initial_stack_idx
 
     def get_current_grasped_object_idx(self) -> torch.Tensor:
         return self.current_idx_objects.clone()
@@ -473,10 +500,13 @@ class ArcStateMachine:
         arc_color_id = self.get_current_goal_color_idx(env_id)
         return ARC_COLOR_TO_COLOR[arc_color_id]
 
-    def get_current_stack_index(self, env_id: int) -> int:
-        """Get the current index of the reserve cube stack for a specific environment and color."""
+    def get_current_cube_slot(self, env_id: int) -> tuple[int, int]:
+        """Return the static physical stack and cube indices selected for the current goal."""
         arc_color_id = self.get_current_goal_color_idx(env_id)
-        return int(self.reserve_cube_poses_idx[env_id, arc_color_id].item())
+        stack_index = int(self.color_to_stack[env_id, arc_color_id].item())
+        if stack_index < 0:
+            raise KeyError(f"No reserve stack is assigned ARC color ID {arc_color_id} for environment {env_id}.")
+        return stack_index, int(self.reserve_cube_indices[env_id, stack_index].item())
 
     def compute(self, ee_pose: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute the next desired end-effector pose and gripper state based on the current state of the environment.
@@ -509,13 +539,18 @@ class ArcStateMachine:
         wp.launch(
             kernel=arc_state_machine_kernel,
             dim=self.num_envs,
+            device=str(self.device),
             inputs=[
                 self.sm_state_wp,
                 self.sm_wait_time_wp,
                 ee_pose_wp,
+                self.rest_pose_wp,
+                self.rest_pose_initialized_wp,
                 self.dest_poses_wp,
                 self.dest_counts_wp,
                 self.reserve_cubes_poses_wp,
+                self.num_reserve_cubes,
+                self.color_to_stack_wp,
                 self.dest_arc_color_ids_wp,
                 self.des_ee_pose_wp,
                 self.des_gripper_state_wp,
@@ -524,7 +559,7 @@ class ArcStateMachine:
                 self.retreat_offset_reserve_wp,
                 self.retreat_from_position_wp,
                 self.current_idx_objects_wp,
-                self.reserve_cube_poses_idx_wp,
+                self.reserve_cube_indices_wp,
                 self.position_threshold,
             ],
         )

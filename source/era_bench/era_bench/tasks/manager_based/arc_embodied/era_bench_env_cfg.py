@@ -18,6 +18,7 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import (
 )
 from typing import Callable, cast
 import torch
+from dataclasses import MISSING
 
 
 from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
@@ -154,9 +155,8 @@ class EventCfg:
     )
 
     setup_task_grid = EventTerm(func=mdp.setup_task_grid, mode="reset")
-    init_reserve_cube_stacks_positions = EventTerm(func=mdp.init_reserve_cubes_positions, mode="reset")
-
-    sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
+    reset_reserve_cube_stacks = EventTerm(func=mdp.reset_reserve_cube_stacks, mode="reset")
+    # sample_objects_destination_positions = EventTerm(func=mdp.sample_success_positions, mode="reset")
 
 
 @configclass
@@ -210,18 +210,20 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     commands: CommandsCfg = CommandsCfg()
+    recorders: mdp.ARCTaskRecorderManagerCfg = mdp.ARCTaskRecorderManagerCfg(sensor_name="table_cam")
+    store_videos: bool = MISSING  # pyright: ignore[reportAssignmentType]
 
     # Post initialization
     def __post_init__(self) -> None:
         """Post initialization."""
 
         # general settings
-        self.decimation = 5
+        self.decimation = 5  # 50Hz
         self.episode_length_s = 80.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render.rendering_mode = "balanced"
-        self.sim.render_interval = 10
+        self.sim.render_interval = 10  # 10Hz
         self.sim.render.antialiasing_mode = "DLAA"
         self.sim.render.enable_dl_denoiser = True
 

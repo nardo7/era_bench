@@ -3,8 +3,7 @@ from typing import cast
 
 from isaaclab_tasks.utils import parse_env_cfg
 import os
-from era_bench.tasks.manager_based.common.recorders import RecorderManagerCfg
-from era_bench.tasks.manager_based.mirror.era_bench_env_cfg import EraBenchEnvCfg
+from era_bench.tasks.manager_based.arc_embodied.era_bench_env_cfg import EraBenchEnvCfg
 from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import DatasetExportMode
@@ -30,22 +29,19 @@ def configure_env(args_cli: Namespace) -> ManagerBasedRLEnvCfg:
     env_cfg.observations.policy.concatenate_terms = False
 
     # Attach the recorder: records actions/states/obs + generates per-episode MP4 videos.
-    env_cfg.recorders = (
-        RecorderManagerCfg(sensor_name="table_cam") if args_cli.store_videos else ActionStateRecorderManagerCfg()
-    )
+    env_cfg.recorders = env_cfg.recorders
+    env_cfg.recorders.set_store_videos(args_cli.store_videos)
+
     env_cfg.recorders.dataset_export_dir_path = output_dir
     env_cfg.recorders.dataset_filename = output_file_name
     env_cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_FAILED_IN_SEPARATE_FILES
 
-    # Keep timeout termination so episodes reset properly
-    # (remove this line if you want infinite-length demos)
-    # if hasattr(env_cfg.terminations, "time_out"):
-    #     env_cfg.terminations.time_out = None
-
     return env_cfg
 
 
-def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int) -> ExtendedCuroboPlanner:
+def configure_curobo_planner(
+    env: ManagerBasedRLEnv, task_name: str, env_id: int, debug: bool = False
+) -> ExtendedCuroboPlanner:
     """Configure cuRobo planner, optionally with extended goalset support.
 
     Args:
@@ -60,7 +56,7 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
     planner_cfg = CuroboPlannerCfg.from_task_name(task_name)
     planner_cfg.visualize_plan = False
     planner_cfg.visualize_spheres = False
-    planner_cfg.debug_planner = False
+    planner_cfg.debug_planner = debug
     planner_cfg.retreat_distance = 0.0
     planner_cfg.approach_distance = 0.0
     planner_cfg.time_dilation_factor = 1.0
@@ -74,12 +70,15 @@ def configure_curobo_planner(env: ManagerBasedRLEnv, task_name: str, env_id: int
     # ``world_ignore_substrings`` replaces the planner's defaults when set.
     env_prim_path = f"/World/envs/env_{env_id}"
     planner_cfg.world_ignore_substrings = [
-        *(planner_cfg.world_ignore_substrings or [
-            f"{env_prim_path}/Robot",
-            f"{env_prim_path}/target",
-            "/World/defaultGroundPlane",
-            "/curobo",
-        ]),
+        *(
+            planner_cfg.world_ignore_substrings
+            or [
+                f"{env_prim_path}/Robot",
+                f"{env_prim_path}/target",
+                "/World/defaultGroundPlane",
+                "/curobo",
+            ]
+        ),
         f"{env_prim_path}/input_grid_cube_",
     ]
 
