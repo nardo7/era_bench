@@ -3,8 +3,7 @@ from typing import cast
 
 from isaaclab_tasks.utils import parse_env_cfg
 import os
-from era_bench.tasks.manager_based.common.recorders import RecorderManagerCfg
-from era_bench.tasks.manager_based.mirror.era_bench_env_cfg import EraBenchEnvCfg
+from era_bench.tasks.manager_based.arc_embodied.era_bench_env_cfg import EraBenchEnvCfg
 from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import DatasetExportMode
@@ -30,17 +29,12 @@ def configure_env(args_cli: Namespace) -> ManagerBasedRLEnvCfg:
     env_cfg.observations.policy.concatenate_terms = False
 
     # Attach the recorder: records actions/states/obs + generates per-episode MP4 videos.
-    env_cfg.recorders = (
-        RecorderManagerCfg(sensor_name="table_cam") if args_cli.store_videos else ActionStateRecorderManagerCfg()
-    )
+    env_cfg.recorders = env_cfg.recorders
+    env_cfg.recorders.set_store_videos(args_cli.store_videos)
+
     env_cfg.recorders.dataset_export_dir_path = output_dir
     env_cfg.recorders.dataset_filename = output_file_name
     env_cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_FAILED_IN_SEPARATE_FILES
-
-    # Keep timeout termination so episodes reset properly
-    # (remove this line if you want infinite-length demos)
-    # if hasattr(env_cfg.terminations, "time_out"):
-    #     env_cfg.terminations.time_out = None
 
     return env_cfg
 

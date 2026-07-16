@@ -18,6 +18,7 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import (
 )
 from typing import Callable, cast
 import torch
+from dataclasses import MISSING
 
 
 from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
@@ -209,6 +210,8 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     commands: CommandsCfg = CommandsCfg()
+    recorders: mdp.ARCTaskRecorderManagerCfg = mdp.ARCTaskRecorderManagerCfg(sensor_name="table_cam")
+    store_videos: bool = MISSING  # pyright: ignore[reportAssignmentType]
 
     # Post initialization
     def __post_init__(self) -> None:

@@ -32,6 +32,7 @@ class EpisodeVideoRecorder(RecorderTerm):
 
     def __init__(self, cfg: "EpisodeVideoRecorderCfg", env):
         super().__init__(cfg, env)
+        self.cfg = cfg
         self._sensor_name = cfg.sensor_name
         self._fps = cfg.fps
 
@@ -52,7 +53,7 @@ class EpisodeVideoRecorder(RecorderTerm):
         that would otherwise destroy colour information in the video.
         """
         sensor = self._env.scene.sensors.get(self._sensor_name)
-        if sensor is None:
+        if sensor is None or not self.cfg.store_videos:
             return None, None
 
         # TiledCamera output is uint8 RGBA or RGB, shape (N, H, W, C)
@@ -71,6 +72,9 @@ class EpisodeVideoRecorder(RecorderTerm):
         Envs whose buffer is still empty (e.g. on the very first reset) receive an empty
         placeholder tensor (length 0) so the index mapping stays intact.
         """
+        if not self.cfg.store_videos:
+            return None, None
+
         if env_ids is None:
             env_ids = list(range(self._env.num_envs))
         if isinstance(env_ids, torch.Tensor):
@@ -133,12 +137,18 @@ class EpisodeVideoRecorderCfg(RecorderTermCfg):
     fps: int = 30
     """Frames per second of the encoded MP4."""
 
+    store_videos: bool = True
+
 
 @configclass
 class RecorderManagerCfg(ActionStateRecorderManagerCfg):
     """Extends the default recorder with per-episode video generation."""
 
     record_episode_video: EpisodeVideoRecorderCfg = MISSING
+
+    def set_store_videos(self, store_videos: bool) -> None:
+        """Enable or disable video recording."""
+        self.record_episode_video.store_videos = store_videos
 
     def __init__(self, sensor_name: str = "tiled_camera", **kwds):
         super().__init__(**kwds)

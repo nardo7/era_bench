@@ -277,7 +277,7 @@ def main():
                 ArcStates.APPROACHING_ABOVE.python_value,
                 ArcStates.APPROACHING_PLACING_ABOVE.python_value,
                 ArcStates.APPROACHING.python_value,
-            ]:  # , ArcStates.APPROACHING.python_value]:
+            ]:
                 plan_success = planner.plan_grasp_center_goal_with_fixed_yaw_candidates(
                     next_pose[0, :7], contact_window_fraction=0.1
                 )

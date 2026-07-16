@@ -57,7 +57,9 @@ class LoadTaskCommand(CommandTerm):
     retries_per_task: dict[str, int] = {}
     current_tasks: list[str] = []
     current_task_pair: list[int] = []
-    current_task_pair_position: list[int] = []
+    """Raw index of the active grid pair within each environment's current task."""
+    _current_task_pair_position: list[int] = []
+    """Internal zero-based position of the active pair in the configured per-task pair queue."""
 
     def __init__(self, cfg: LoadTaskCommandCfg, env: EraBenchEnv):
         super().__init__(cfg, env)
@@ -72,7 +74,7 @@ class LoadTaskCommand(CommandTerm):
         self.retries_per_task = {task.task_id: 0 for task in self.tasks}
         self._task_pair_queue = self._resolve_task_pair_queue(cfg.task_pairs)
         self.current_tasks = self._task_queue[: self.num_envs]
-        self.current_task_pair_position = [0] * self.num_envs
+        self._current_task_pair_position = [0] * self.num_envs
         self.current_task_pair = [self._task_pair_queue[task_id][0] for task_id in self.current_tasks]
         self._cube_size = env.cfg.scene.cubes_size[0]
         self._separation = env.cfg.scene.separation_distance
@@ -246,11 +248,11 @@ class LoadTaskCommand(CommandTerm):
     def _transition_to_next_pair(self, env_id: int):
         """Transition to the next pair in the current task for the given environment ID."""
         task_id = self.current_tasks[env_id]
-        next_position = self.current_task_pair_position[env_id] + 1
+        next_position = self._current_task_pair_position[env_id] + 1
         if next_position >= len(self._task_pair_queue[task_id]):
             self._transition_to_next_task(env_id)
             return
-        self.current_task_pair_position[env_id] = next_position
+        self._current_task_pair_position[env_id] = next_position
         self.current_task_pair[env_id] = self._task_pair_queue[task_id][next_position]
         self.retries_per_task[task_id] = 0
         self._set_task_in_progress(env_id)
@@ -276,7 +278,7 @@ class LoadTaskCommand(CommandTerm):
         next_task_id = self._get_next_task_id()
         if next_task_id is not None:
             self.current_tasks[env_id] = next_task_id
-            self.current_task_pair_position[env_id] = 0
+            self._current_task_pair_position[env_id] = 0
             self.current_task_pair[env_id] = self._task_pair_queue[next_task_id][0]
             self._set_task_in_progress(env_id)
             self.retries_per_task[next_task_id] = 0
