@@ -14,6 +14,8 @@ import time
 from typing import cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ERA_BENCH_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# sys.path.insert(0, os.path.join(ERA_BENCH_ROOT, "source", "era_bench"))
 
 from isaaclab.app import AppLauncher
 from parser_utils import parse_arguments
@@ -216,6 +218,7 @@ def main():
     step = 0
     state_steps = 0
     start = time.time()
+    timestamps = torch.full((env.num_envs,), start, dtype=torch.float64, device=env.device)
     recovery_active_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     while simulation_app.is_running():
         # run everything in inference mode
@@ -309,6 +312,11 @@ def main():
             arc_sm.reset_idx(torch.where(dones)[0].tolist())
             arc_sm.update_reserve_cube_stacks(env.reserve_cube_stacks, done_env_ids)
             arc_sm.update_success_positions(env.success_positions, done_env_ids)
+            end_time = time.time()
+            elapsed_times = end_time - timestamps[done_env_ids]
+            print(
+                f"[INFO]: Episode completed for envs {done_env_ids.tolist()} in {elapsed_times.tolist()} seconds. Resetting..."
+            )
 
         print(
             f"[INFO]: Step: {step}, State steps executed: {state_steps}, Total time elapsed: {time.time() - start:.2f} seconds"

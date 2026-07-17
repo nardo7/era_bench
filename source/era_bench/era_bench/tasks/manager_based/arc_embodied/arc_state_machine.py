@@ -214,7 +214,11 @@ def arc_state_machine_kernel(
         ):
             retreat_from_position[tid] = ee_pose[tid]
 
-    if state == ARC_STATE_PLACING and condition:
+    # Keep the selected physical cube slot valid throughout PLACING: the
+    # motion planner still needs that object as its attached collision body.
+    # Advance the goal and pop the stack only after the gripper has released it
+    # and the arm begins its retreat.
+    if state == ARC_STATE_RETREATING_PLACING_ABOVE and condition:
         current_goal_objects[tid] = (current_goal_object_idx + 1) % num_desired_goals
         reserve_cube_indices[tid, stack_idx] = reserve_cube_idx - 1
 

@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 import torch
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 
-from isaaclab.assets import Articulation, RigidObject, RigidObjectCollection, AssetBase
+from isaaclab.assets import Articulation, RigidObject, AssetBase
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import FrameTransformer
-import isaaclab.sim as sim_utils
 from isaacsim.core.prims import XFormPrim
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
-    from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
     from era_bench.tasks.manager_based.arc_embodied.era_bench_env import EraBenchEnv
 
 
@@ -206,8 +204,4 @@ def objects_placed(
     # Update latch: object is placed only if it was previously grasped
     currently_grasped = objects_grasped(env, robot_cfg, ee_frame_cfg, diff_threshold=grasp_diff_threshold)
     was_grasped |= currently_grasped
-    print(f"Currently grasped: {torch.argwhere(currently_grasped.squeeze(0)).squeeze(1)}")
-    print(f"Was grasped: {torch.argwhere(was_grasped.squeeze(0)).squeeze(1)}")
-    print(f"On table: {torch.argwhere(on_table.squeeze(0)).squeeze(1)}")
-    print(f"[INFOR] Placed: {torch.argwhere(torch.logical_and(on_table, was_grasped).squeeze(0)).squeeze(1)}")
     return torch.logical_and(on_table, was_grasped)

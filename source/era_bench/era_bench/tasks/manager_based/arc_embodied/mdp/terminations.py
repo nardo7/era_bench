@@ -11,22 +11,12 @@ from isaaclab.managers import ManagerTermBase
 from isaaclab.sensors import FrameTransformer
 from ...common.utils import line_direction_xy_from_quat
 from .commands import LoadTaskCommand
+from .observations import objects_grasped
 from isaaclab.envs.mdp import time_out as isaaclab_time_out
 
 if TYPE_CHECKING:
     from era_bench.tasks.manager_based.arc_embodied.era_bench_env import EraBenchEnv
     from isaaclab.envs import ManagerBasedRLEnv
-
-
-def _signed_distance_to_line(
-    points_xy: torch.Tensor, line_pos_xy: torch.Tensor, line_dir_xy: torch.Tensor
-) -> torch.Tensor:
-    """Signed distance surrogate to 2D line; sign indicates side of line."""
-    points_to_line = points_xy - line_pos_xy.unsqueeze(1)
-    return (
-        line_dir_xy[:, 0].unsqueeze(1) * points_to_line[:, :, 1]
-        - line_dir_xy[:, 1].unsqueeze(1) * points_to_line[:, :, 0]
-    )
 
 
 def time_out(env: EraBenchEnv) -> torch.Tensor:
@@ -42,6 +32,40 @@ def time_out(env: EraBenchEnv) -> torch.Tensor:
             load_task_command.set_task_failed(env_id)
 
     return timed_out
+
+
+def reserve_cubes_displaced(
+    env: EraBenchEnv,
+    displacement_threshold: float = 0.03,
+) -> torch.Tensor:
+    """Fail when an ungrasped reserve cube is pushed away from its reset pose.
+
+    The reset event stores world-frame poses for every physical reserve-cube
+    slot in ``reserve_cube_stacks``. Cubes that have been grasped are excluded:
+    moving one of those is the intended pick-and-place operation. The grasp
+    latch is updated here as well because termination is evaluated before the
+    regular observation pass.
+    """
+    live_positions_w = env.get_live_reserve_cube_stack_poses()[..., :3]
+    reset_positions_w = env.reserve_cube_stacks.poses_w[..., :3]
+
+    currently_grasped = objects_grasped(env)
+    env.reserve_cube_was_grasped |= currently_grasped
+    was_grasped = env.reserve_cube_was_grasped.reshape_as(live_positions_w[..., 0])
+
+    displacement = torch.linalg.vector_norm(live_positions_w - reset_positions_w, dim=-1)
+    displaced = torch.any((displacement > displacement_threshold) & ~was_grasped, dim=(1, 2))
+
+    if torch.any(displaced):
+        load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
+        for env_id in displaced.nonzero(as_tuple=False).flatten().tolist():
+            print(
+                f"[INFO]: Environment {env_id} displaced an ungrasped reserve cube. "
+                f"Marking current task '{load_task_command.current_tasks[env_id]}' as failed."
+            )
+            load_task_command.set_task_failed(env_id)
+
+    return displaced
 
 
 class no_progress(ManagerTermBase):
@@ -135,6 +159,58 @@ class no_progress(ManagerTermBase):
         return stalled
 
 
+def _success_positions_reached(
+    env: EraBenchEnv,
+    distance_threshold: float,
+) -> torch.Tensor:
+    """Return whether each active success-position slot has a matching cube."""
+    success_positions = env.success_positions
+    live_reserve_positions = env.get_live_reserve_cube_stack_poses()[..., :3]
+    reserve_positions = live_reserve_positions.flatten(start_dim=1, end_dim=2)
+    stack_color_ids = env.reserve_cube_stacks.color_ids
+    reached = torch.zeros_like(success_positions.active_targets)
+
+    for arc_color_id, color in ARC_COLOR_TO_COLOR.items():
+        color_target_slots = success_positions.color_mask(color)
+        if not torch.any(color_target_slots):
+            continue
+
+        matching_stacks = stack_color_ids == arc_color_id
+        matching_cubes = matching_stacks.unsqueeze(-1).expand_as(live_reserve_positions[..., 0]).flatten(start_dim=1)
+        distances = torch.cdist(success_positions.positions_w, reserve_positions, p=2)
+        distances = torch.where(matching_cubes.unsqueeze(1), distances, torch.full_like(distances, torch.inf))
+        reached |= color_target_slots & (torch.min(distances, dim=2).values <= distance_threshold)
+
+    return reached
+
+
+def success_position_gap(
+    env: EraBenchEnv,
+) -> torch.Tensor:
+    """Fail when the ordered success mask contains ``True, False, True``."""
+    reached = env.success_positions_reached
+    active_reached = reached & env.success_positions.active_targets
+    reached_before = torch.cumsum(active_reached, dim=1, dtype=torch.int32) > 0
+    reached_after = torch.flip(
+        torch.cumsum(torch.flip(active_reached, dims=(1,)), dim=1, dtype=torch.int32) > 0,
+        dims=(1,),
+    )
+    gaps = env.success_positions.active_targets & ~reached & reached_before & reached_after
+    failed = torch.any(gaps, dim=1)
+
+    if torch.any(failed):
+        load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
+        for env_id in failed.nonzero(as_tuple=False).flatten().tolist():
+            gap_position = int(torch.nonzero(gaps[env_id], as_tuple=False).flatten()[0].item())
+            print(
+                f"[INFO]: Environment {env_id} has a gap at success position {gap_position}. "
+                f"Marking current task '{load_task_command.current_tasks[env_id]}' as failed."
+            )
+            load_task_command.set_task_failed(env_id)
+
+    return failed
+
+
 def are_objects_in_success_positions(
     env: EraBenchEnv,
     distance_threshold: float = 0.01,
@@ -154,6 +230,8 @@ def are_objects_in_success_positions(
     del scene_cfg  # Kept for parity with other terminations and typing context.
 
     success_positions = env.success_positions
+    reached = _success_positions_reached(env, distance_threshold)
+    env.success_positions_reached.copy_(reached)
     live_reserve_positions = env.get_live_reserve_cube_stack_poses()[..., :3]
     stack_color_ids = env.reserve_cube_stacks.color_ids
     success_mask = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
@@ -170,20 +248,13 @@ def are_objects_in_success_positions(
             continue
 
         matching_stacks = stack_color_ids == arc_color_id
-        reserve_positions = live_reserve_positions.flatten(start_dim=1, end_dim=2)
         matching_cubes = matching_stacks.unsqueeze(-1).expand_as(live_reserve_positions[..., 0]).flatten(start_dim=1)
         num_reserve = matching_cubes.sum(dim=1)
 
-        # Pairwise distances: [environment, target slot, reserve cube]. Slots
-        # belonging to other colors are filtered out below.
-        distances = torch.cdist(success_positions.positions_w, reserve_positions, p=2)
-        distances = torch.where(matching_cubes.unsqueeze(1), distances, torch.full_like(distances, torch.inf))
-        closest_distances = torch.min(distances, dim=2).values
-        target_is_reached = closest_distances <= distance_threshold
-        non_color_slots_are_ignored = torch.ones_like(target_is_reached)
+        non_color_slots_are_ignored = torch.ones_like(reached)
         color_targets_are_reached = torch.where(
             color_target_slots,
-            target_is_reached,
+            reached,
             non_color_slots_are_ignored,
         )
         color_success = torch.all(color_targets_are_reached, dim=1)

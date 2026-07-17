@@ -101,6 +101,9 @@ class ObservationsCfg:
             func=mdp.objects_placed,
         )
 
+        def __post_init__(self) -> None:
+            self.concatenate_terms = False
+
     # observation groups
     policy: PolicyCfg = PolicyCfg()
     subtasks: SubTasksCfg = SubTasksCfg()
@@ -169,6 +172,11 @@ class TerminationsCfg:
     # (1) Time out
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
+    reserve_cubes_displaced = DoneTerm(
+        func=mdp.reserve_cubes_displaced,
+        params={"displacement_threshold": 0.03},
+    )
+
     no_progress = DoneTerm(
         func=cast(Callable[..., torch.Tensor], mdp.no_progress),
         params={
@@ -179,6 +187,8 @@ class TerminationsCfg:
     )
 
     success = DoneTerm(func=mdp.are_objects_in_success_positions, params={"distance_threshold": 0.015})
+
+    success_position_gap = DoneTerm(func=mdp.success_position_gap)
 
 
 ##
@@ -208,7 +218,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
 
         # general settings
         self.decimation = 5  # 50Hz
-        self.episode_length_s = 80.0
+        self.episode_length_s = 320.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render.rendering_mode = "balanced"
