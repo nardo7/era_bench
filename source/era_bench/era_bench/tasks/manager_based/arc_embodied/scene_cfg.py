@@ -23,11 +23,11 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     wrist_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/panda_hand/wrist_cam",
         update_period=0.0,
-        height=84,
-        width=84,
+        height=112,
+        width=112,
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 2)
+            focal_length=27.294820675, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 2)
         ),
         offset=TiledCameraCfg.OffsetCfg(
             pos=(0.13, 0.0, -0.15), rot=(-0.70614, 0.03701, 0.03701, -0.70614), convention="ros"
@@ -37,26 +37,28 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     table_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/table_cam",
         update_period=0.0,
-        height=256,
-        width=384,
+        height=252,
+        width=336,
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=18.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 5.0)
+            focal_length=24.0, focus_distance=2.4, horizontal_aperture=18.43, clipping_range=(0.1, 5.0)
         ),
+        # offset=TiledCameraCfg.OffsetCfg(
+        #     pos=(1.8, 0.0, 0.7), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"
+        # ),
         offset=TiledCameraCfg.OffsetCfg(
-            pos=(1.8, 0.0, 0.7), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"
+            pos=(1.8, 0.0, 1.7), rot=(0.24184, -0.66446, -0.66446, 0.24184), convention="ros"
         ),
-        # offset=CameraCfg.OffsetCfg(pos=(1.8, 0.0, 1.7), rot=(0.24184, -0.66446, -0.66446, 0.24184), convention="ros"),
     )
 
     origin_top_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/origin_top_cam",
         update_period=0.0,
-        height=384,
-        width=384,
+        height=280,
+        width=280,
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=20.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 5.0)
+            focal_length=25.294922600, focus_distance=2.4, horizontal_aperture=20.955, clipping_range=(0.1, 5.0)
         ),
         offset=TiledCameraCfg.OffsetCfg(pos=(0.2, 0.0, 2.4), rot=(0.0, 0.70711, 0.70711, 0.0), convention="ros"),
     )

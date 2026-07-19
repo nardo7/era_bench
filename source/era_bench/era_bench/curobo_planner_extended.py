@@ -114,7 +114,7 @@ class ExtendedCuroboPlanner(CuroboPlanner):
         )
         return torch.cat((hand_pos, hand_quat), dim=-1)
 
-    def attach_object(self, object_name: str, gripper_pose: torch.Tensor, env_id: int = 0) -> None:
+    def attach_object(self, object_name: str, gripper_pose: torch.Tensor) -> None:
         """Attach an object to the robot's end-effector for planning.
 
         Args:
@@ -123,7 +123,7 @@ class ExtendedCuroboPlanner(CuroboPlanner):
         """
         self.set_expected_attached_object(object_name)
         self.update_world()
-        self._sync_expected_attachment(env_id)
+        self._sync_expected_attachment()
 
     def detach_objects(self) -> None:
         self.set_expected_attached_object(None)
@@ -223,7 +223,7 @@ class ExtendedCuroboPlanner(CuroboPlanner):
 
         self.reset_plan()
         self.update_world()
-        self._sync_expected_attachment(env_id=0)
+        self._sync_expected_attachment()
         start_state = self._get_current_joint_state_for_curobo()
 
         try:
@@ -277,7 +277,7 @@ class ExtendedCuroboPlanner(CuroboPlanner):
         finally:
             self._detach_objects()
 
-    def _sync_expected_attachment(self, env_id: int) -> None:
+    def _sync_expected_attachment(self) -> None:
         expected_attached_object = self._expected_attached_object
         gripper_closed = expected_attached_object is not None
         self._set_gripper_state(gripper_closed)
@@ -286,10 +286,12 @@ class ExtendedCuroboPlanner(CuroboPlanner):
         if expected_attached_object and expected_attached_object not in current_attached:
             object_mappings = self._get_object_mappings()
             if expected_attached_object in object_mappings:
-                gripper_pos = self.robot.data.joint_pos[env_id, -2:]
+                gripper_pos = self.robot.data.joint_pos[self.env_id, -2:]
                 is_grasped = self._check_object_grasped(gripper_pos, expected_attached_object)
                 if is_grasped:
-                    self._attach_object(expected_attached_object, object_mappings[expected_attached_object], env_id)
+                    self._attach_object(
+                        expected_attached_object, object_mappings[expected_attached_object], self.env_id
+                    )
 
         if expected_attached_object is None and current_attached:
             self._detach_objects()

@@ -66,6 +66,8 @@ _build
 
 # Tests
 tests/
+!source/era_bench/era_bench/tasks/manager_based/arc_embodied/tests/
+!source/era_bench/era_bench/tasks/manager_based/arc_embodied/tests/test_commands.py
 
 # Docker history
 .isaac-lab-docker-history

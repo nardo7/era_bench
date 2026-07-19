@@ -223,11 +223,11 @@ def are_objects_in_success_positions(
     ARC color, this function selects the active slots of that color, compares
     them with reserve cubes of the same color, and combines the result across
     all colors. An output with no active targets is already complete. Otherwise,
-    the TCP must also be more than 5cm away from every target before the task is
-    considered complete.
+    the TCP must also be more than 5cm away from every target and beyond the
+    front edge of the populated output grid before the task is considered
+    complete.
     """
     scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
-    del scene_cfg  # Kept for parity with other terminations and typing context.
 
     success_positions = env.success_positions
     reached = _success_positions_reached(env, distance_threshold)
@@ -266,8 +266,6 @@ def are_objects_in_success_positions(
         color_success &= enough_reserve_cubes
         success_mask &= color_success
 
-        # Do not mark success while the TCP is still at a target location. Set
-        # non-color slots to infinity so they cannot affect the minimum.
         tcp_to_targets = torch.cdist(tcp_position_w.unsqueeze(1), success_positions.positions_w, p=2).squeeze(1)
         tcp_to_color_targets = torch.where(
             color_target_slots,
@@ -276,6 +274,20 @@ def are_objects_in_success_positions(
         )
         tcp_is_away_from_color_targets = torch.min(tcp_to_color_targets, dim=1).values > 0.05
         success_mask &= tcp_is_away_from_color_targets
+
+    # Do not mark success until the TCP has retreated beyond the front edge of
+    # the populated output grid.  The fixed-capacity target buffer is
+    # zero-padded, so only active slots may contribute to this boundary.
+    # Keeping the TCP 10 cm beyond that edge leaves the wrist camera a clear
+    # view of the completed output before the environment resets.
+    active_target_y = torch.where(
+        success_positions.active_targets,
+        success_positions.positions_w[..., 1],
+        torch.full_like(success_positions.positions_w[..., 1], torch.inf),
+    )
+    output_grid_front_edge = active_target_y.min(dim=1).values - scene_cfg.cubes_size[1] * 0.5
+    tcp_out_of_grid = (~success_positions.has_targets) | (tcp_position_w[:, 1] < output_grid_front_edge - 0.2)
+    success_mask &= tcp_out_of_grid
 
     if torch.any(success_mask):
         load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))

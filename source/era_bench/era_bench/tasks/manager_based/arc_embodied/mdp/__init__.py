@@ -12,5 +12,14 @@ from .observations import *  # noqa: F401, F403
 from .terminations import *  # noqa: F401, F403
 from .events import *  # noqa: F401, F403
 from .ternary_joint_actions import TernaryJointPositionActionCfg
+from .hybrid_arm_actions import (
+    ArcControlMode,
+    HybridArmAction,
+    HybridArmActionCfg,
+    CONTROL_MODE_INDEX,
+    PLAN_ID_INDEX,
+    ATTACHMENT_STACK_INDEX,
+    ATTACHMENT_CUBE_INDEX,
+)
 from .commands import *  # noqa: F401, F403
 from .recorders import *  # noqa: F401, F403

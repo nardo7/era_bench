@@ -46,6 +46,21 @@ class EpisodeVideoRecorder(RecorderTerm):
         for env_id in env_ids:
             self._buffers[env_id].clear()
 
+    def _should_store_video(self, env_id: int) -> bool:
+        """Return whether this episode should be encoded when it resets."""
+        if self.cfg.store_videos:
+            return True
+
+        # ARC done terms set this status before ManagerBasedRLEnv triggers
+        # recorder_manager.record_pre_reset().  Keep this recorder usable by
+        # non-ARC environments by treating a missing load-task term as not failed.
+        try:
+            load_task = self._env.command_manager.get_term("load_task")
+            task_id = load_task.current_tasks[env_id]
+            return load_task.tasks_status[task_id].value == "failed"
+        except (AttributeError, KeyError, ValueError):
+            return False
+
     def record_pre_step(self):
         """Buffer one raw uint8 RGB frame per env directly from the camera sensor.
 
@@ -53,7 +68,7 @@ class EpisodeVideoRecorder(RecorderTerm):
         that would otherwise destroy colour information in the video.
         """
         sensor = self._env.scene.sensors.get(self._sensor_name)
-        if sensor is None or not self.cfg.store_videos:
+        if sensor is None:
             return None, None
 
         # TiledCamera output is uint8 RGBA or RGB, shape (N, H, W, C)
@@ -72,9 +87,6 @@ class EpisodeVideoRecorder(RecorderTerm):
         Envs whose buffer is still empty (e.g. on the very first reset) receive an empty
         placeholder tensor (length 0) so the index mapping stays intact.
         """
-        if not self.cfg.store_videos:
-            return None, None
-
         if env_ids is None:
             env_ids = list(range(self._env.num_envs))
         if isinstance(env_ids, torch.Tensor):
@@ -85,6 +97,14 @@ class EpisodeVideoRecorder(RecorderTerm):
 
         for env_id in env_ids:
             frames_buffer = self._buffers[env_id]
+
+            if not self._should_store_video(env_id):
+                # Frames must still be cleared after a successful episode when
+                # video storage is disabled, otherwise they leak into a later
+                # failed episode for the same environment.
+                frames_buffer.clear()
+                video_list.append(torch.zeros(0, dtype=torch.uint8))
+                continue
 
             if len(frames_buffer) == 0:
                 # No frames yet for this env (very first reset); store an empty placeholder
@@ -104,7 +124,11 @@ class EpisodeVideoRecorder(RecorderTerm):
 
             # encode MP4 into an in-memory buffer
             buf = io.BytesIO()
-            writer = imageio.get_writer(buf, format="mp4", fps=self._fps, codec="libx264", quality=8)
+            # Use the required 28-pixel macroblock size. Camera dimensions such
+            # as 336x252 are already divisible by 28, so no padding is applied.
+            writer = imageio.get_writer(
+                buf, format="mp4", fps=self._fps, codec="libx264", quality=8, macro_block_size=28
+            )
             for frame in frames_np:
                 writer.append_data(frame)
             writer.close()
@@ -117,7 +141,7 @@ class EpisodeVideoRecorder(RecorderTerm):
 
             self._ep_counts[env_id] += 1
             frames_buffer.clear()
-            video_list.append(torch.from_numpy(mp4_bytes))
+            video_list.append(torch.tensor(mp4_bytes.tolist(), dtype=torch.uint8))
 
         if not any_valid:
             return None, None  # very first reset — nothing buffered yet
@@ -138,6 +162,7 @@ class EpisodeVideoRecorderCfg(RecorderTermCfg):
     """Frames per second of the encoded MP4."""
 
     store_videos: bool = True
+    """Store every episode video; failed ARC episodes are always stored."""
 
 
 @configclass

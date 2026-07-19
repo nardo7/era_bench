@@ -53,7 +53,7 @@ class LoadTaskCommand(CommandTerm):
     """
 
     cfg: LoadTaskCommandCfg
-    tasks = sort_by_amount_of_output_pixels(get_era_bench_tasks(), reverse=True)
+    tasks = sort_by_amount_of_output_pixels(get_era_bench_tasks())
     tasks_status: dict[str, TaskStatus] = {}
     retries_per_task: dict[str, int] = {}
     current_tasks: list[str] = []
@@ -254,7 +254,8 @@ class LoadTaskCommand(CommandTerm):
             current_task_id = self.current_tasks[env_id]
             if self.tasks_status[current_task_id] == TaskStatus.FAILED:
                 if self.retries_per_task[current_task_id] >= self.cfg.retries:
-                    self._transition_to_next_pair(env_id)
+                    self.tasks_status[current_task_id] = TaskStatus.FAILED
+                    self._transition_to_next_task(env_id)
                     continue
                 self._retry_current_pair(env_id)
             elif self.tasks_status[current_task_id] == TaskStatus.COMPLETED:

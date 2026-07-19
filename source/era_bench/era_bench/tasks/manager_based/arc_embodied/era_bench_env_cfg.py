@@ -42,14 +42,18 @@ from .scene_cfg import FRANKA_GRASP_CENTER_OFFSET, EraBenchSceneCfg
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    arm_actions: DifferentialInverseKinematicsActionCfg = DifferentialInverseKinematicsActionCfg(
+    arm_actions: mdp.HybridArmActionCfg = mdp.HybridArmActionCfg(
         asset_name="robot",
-        joint_names=["panda_joint.*"],
-        body_name="panda_hand",
-        controller=DifferentialIKControllerCfg(
-            command_type="pose", use_relative_mode=False, ik_method="dls", ik_params={"lambda_val": 0.05}
+        diff_ik_cfg=DifferentialInverseKinematicsActionCfg(
+            asset_name="robot",
+            joint_names=["panda_joint.*"],
+            body_name="panda_hand",
+            controller=DifferentialIKControllerCfg(
+                command_type="pose", use_relative_mode=False, ik_method="dls", ik_params={"lambda_val": 0.05}
+            ),
+            body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=FRANKA_GRASP_CENTER_OFFSET),
         ),
-        body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=FRANKA_GRASP_CENTER_OFFSET),
+        curobo_task_name="ARC-Embodied-Era-Bench-v0",
     )
     gripper_action: mdp.TernaryJointPositionActionCfg = mdp.TernaryJointPositionActionCfg(
         asset_name="robot",

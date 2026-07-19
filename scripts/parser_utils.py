@@ -47,4 +47,34 @@ def parse_arguments():
         default=False,
         help="Whether to overwrite the dataset file if it already exists.",
     )
+    parser.add_argument(
+        "--track",
+        action="store_true",
+        default=False,
+        help="Log ARC state-machine progress to Weights & Biases.",
+    )
+    parser.add_argument(
+        "--wandb-project-name",
+        type=str,
+        default="era-bench-arc-state-machine",
+        help="Weights & Biases project used when --track is set.",
+    )
+    parser.add_argument(
+        "--wandb-entity",
+        type=str,
+        default=None,
+        help="Optional Weights & Biases entity (user or team).",
+    )
+    parser.add_argument(
+        "--wandb-name",
+        type=str,
+        default=None,
+        help="Optional name for the Weights & Biases run.",
+    )
+    parser.add_argument(
+        "--wandb-mode",
+        choices=("online", "offline", "disabled"),
+        default=None,
+        help="Optional Weights & Biases mode; defaults to the WANDB_MODE environment variable or online.",
+    )
     return parser

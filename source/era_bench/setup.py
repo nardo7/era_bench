@@ -24,6 +24,7 @@ EXTENSION_TOML_DATA = toml.load(
 INSTALL_REQUIRES = [
     f"arc-utils @ {ARC_UTILS_PATH.resolve().as_uri()}",
     "psutil",
+    "wandb",
 ]
 
 # Installation operation

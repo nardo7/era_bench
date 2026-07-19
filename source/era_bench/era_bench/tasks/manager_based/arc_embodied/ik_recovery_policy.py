@@ -5,16 +5,11 @@ import os
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
 
 import torch
 
 from .arc_state_machine import ArcStates
 from .ik_watchdog import ArcIKWatchdogUpdate
-
-
-class _CuroboPlannerLike(Protocol):
-    def plan_grasp_center_goal_with_fixed_yaw_candidates(self, grasp_center_goal: torch.Tensor) -> bool: ...
 
 
 def _normalize_watched_states(watched_states: ArcStates | Sequence[ArcStates]) -> tuple[ArcStates, ...]:
@@ -36,7 +31,7 @@ class ArcIKRecoveryUpdate:
     command: torch.Tensor
     active_mask: torch.Tensor
     watchdog_reset_env_ids: torch.Tensor
-    execute_curobo_env_ids: torch.Tensor
+    request_curobo_env_ids: torch.Tensor
     messages: tuple[str, ...]
 
 
@@ -70,7 +65,6 @@ class ArcIKRecoveryPolicy:
         retreat_lateral_radius_step: float = 0.03,
         retreat_position_tolerance: float = 0.015,
         max_retreat_steps: int = 12,
-        curobo_planner: _CuroboPlannerLike | None = None,
         log_path: str | None = None,
         session_label: str | None = None,
     ) -> None:
@@ -102,7 +96,6 @@ class ArcIKRecoveryPolicy:
         self.retreat_lateral_radius_step = retreat_lateral_radius_step
         self.retreat_position_tolerance = retreat_position_tolerance
         self.max_retreat_steps = max_retreat_steps
-        self._curobo_planner = curobo_planner
         self.log_path = log_path or self._default_log_path()
         self.session_label = session_label or "arc-ik-recovery"
 
@@ -156,7 +149,7 @@ class ArcIKRecoveryPolicy:
         command = target_command.clone()
         messages: list[str] = list(watchdog_update.warning_messages)
         watchdog_reset_env_ids: list[int] = []
-        execute_curobo_env_ids: list[int] = []
+        request_curobo_env_ids: list[int] = []
         started_retreat_env_ids: list[int] = []
 
         active_state_mask = torch.isin(
@@ -206,25 +199,21 @@ class ArcIKRecoveryPolicy:
                 watchdog_reset_env_ids.append(env_id)
                 self._phase[env_id] = self._PHASE_IDLE
                 self._retry_command[env_id] = target_command[env_id]
-                if self._attempt_curobo_plan(env_id, target_command[env_id, :7]):
-                    execute_curobo_env_ids.append(env_id)
-                    messages.append(
-                        "[INFO]: Arc IK recovery escalating to curobo "
-                        f"env={env_id} attempt={int(self._attempt_idx[env_id].item())} result=planned"
-                    )
-                else:
-                    self._exhausted[env_id] = True
-                    messages.append(
-                        "[WARNING]: Arc IK recovery exhausted " f"env={env_id} attempts=1 planner=curobo result=failed"
-                    )
+                request_curobo_env_ids.append(env_id)
+                messages.append(
+                    "[INFO]: Arc IK recovery requesting curobo "
+                    f"env={env_id} attempt={int(self._attempt_idx[env_id].item())}"
+                )
 
         active_recovery_mask = self._phase != self._PHASE_IDLE
         self._log_messages(messages, arc_state=arc_state, step=step, elapsed_s=elapsed_s)
         return ArcIKRecoveryUpdate(
             command=command,
             active_mask=active_recovery_mask,
-            watchdog_reset_env_ids=torch.tensor(watchdog_reset_env_ids, device=self.device, dtype=torch.long),
-            execute_curobo_env_ids=torch.tensor(execute_curobo_env_ids, device=self.device, dtype=torch.long),
+            watchdog_reset_env_ids=torch.tensor(
+                sorted(set(watchdog_reset_env_ids)), device=self.device, dtype=torch.long
+            ),
+            request_curobo_env_ids=torch.tensor(request_curobo_env_ids, device=self.device, dtype=torch.long),
             messages=tuple(messages),
         )
 
@@ -289,13 +278,6 @@ class ArcIKRecoveryPolicy:
         lateral_x = retreat_lateral_radius * math.cos(azimuth)
         lateral_y = retreat_lateral_radius * math.sin(azimuth)
         return torch.tensor([lateral_x, lateral_y, retreat_height], device=self.device, dtype=dtype)
-
-    def _attempt_curobo_plan(self, env_id: int, goal_command: torch.Tensor) -> bool:
-        if self._curobo_planner is None:
-            return False
-        if env_id != 0:
-            return False
-        return bool(self._curobo_planner.plan_grasp_center_goal_with_fixed_yaw_candidates(goal_command))
 
     def _retreat_reached(self, env_ids: torch.Tensor, tcp_position: torch.Tensor) -> torch.Tensor:
         retreat_error = torch.linalg.vector_norm(

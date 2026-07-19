@@ -23,6 +23,13 @@ class GripperState:
     CLOSE = wp.constant(-1.0)
 
 
+class ArcControlMode(Enum):
+    """Arm controller selected by the ARC state machine."""
+
+    DIFF_IK = 0
+    CUROBO = 1
+
+
 class ArcStates(Enum):
     """States for the Arc task."""
 
@@ -127,6 +134,7 @@ def get_state_config(state: int) -> tuple[float, int]:
 def arc_state_machine_kernel(
     sm_state: wp.array(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     sm_wait_time: wp.array(dtype=float),  # pyright: ignore[reportInvalidTypeForm]
+    transition_allowed: wp.array(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
     ee_pose: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     rest_pose: wp.array(dtype=wp.transform),  # pyright: ignore[reportInvalidTypeForm]
     rest_pose_initialized: wp.array(dtype=int),  # pyright: ignore[reportInvalidTypeForm]
@@ -151,10 +159,11 @@ def arc_state_machine_kernel(
     state = sm_state[tid]
     num_desired_goals = num_desired_goal_poses[tid]
 
-    # An empty ARC output is already successful. Keep its state machine in a
-    # safe REST state until the environment processes the success termination.
-    # This guard must precede every target/stack lookup below.
-    if num_desired_goals == 0:
+    # A goal index equal to the target count is the completed sentinel.  It is
+    # set only after the final placement retreat reaches REST, so the arm
+    # returns to its captured rest pose and cannot wrap around to the first
+    # output target while the success termination is waiting to fire.
+    if current_goal_objects[tid] >= num_desired_goals:
         sm_state[tid] = ARC_STATE_REST
         sm_wait_time[tid] = 0.0
         if rest_pose_initialized[tid] == 0:
@@ -176,7 +185,10 @@ def arc_state_machine_kernel(
     state_wait_time, next_state = get_state_config(state)
 
     # Check transition condition
-    condition = sm_wait_time[tid] > state_wait_time
+    # The caller may temporarily defer a transition while its arm controller
+    # completes a motion.  This remains controller-neutral: the state machine
+    # only receives a per-environment permission bit.
+    condition = transition_allowed[tid] != 0 and sm_wait_time[tid] > state_wait_time
     condition = (
         condition
         and distance_below_threshold(
@@ -216,11 +228,14 @@ def arc_state_machine_kernel(
 
     # Keep the selected physical cube slot valid throughout PLACING: the
     # motion planner still needs that object as its attached collision body.
-    # Advance the goal and pop the stack only after the gripper has released it
-    # and the arm begins its retreat.
+    # Pop the stack after the gripper releases the cube, but keep that goal
+    # selected throughout the retreat. Once the retreat reaches REST, advance
+    # to the next goal or to the completed sentinel after the final goal.
     if state == ARC_STATE_RETREATING_PLACING_ABOVE and condition:
-        current_goal_objects[tid] = (current_goal_object_idx + 1) % num_desired_goals
         reserve_cube_indices[tid, stack_idx] = reserve_cube_idx - 1
+
+    if state == ARC_STATE_REST and condition:
+        current_goal_objects[tid] = current_goal_object_idx + 1
 
     if state == ARC_STATE_REST:
         des_gripper_state[tid] = GripperState.OPEN
@@ -317,7 +332,9 @@ class ArcStateMachine:
             )
         if reserve_cube_stacks.num_envs != self.num_envs:
             raise ValueError("Reserve stack buffer has a different number of environments.")
-        self._validate_stack_pose_tensor_shape("reserve_cube_stacks.poses_w", reserve_cube_stacks.poses_w, self.num_envs)
+        self._validate_stack_pose_tensor_shape(
+            "reserve_cube_stacks.poses_w", reserve_cube_stacks.poses_w, self.num_envs
+        )
         self.num_stacks = reserve_cube_stacks.num_stacks
         num_reserve_cubes = reserve_cube_stacks.cubes_per_stack
         self.num_reserve_cubes = num_reserve_cubes
@@ -424,9 +441,7 @@ class ArcStateMachine:
                 f"Expected success positions for {self.num_envs} environments, got {success_positions.num_envs}."
             )
         if success_positions.max_targets != self.dest_poses.shape[1]:
-            raise ValueError(
-                f"Expected {self.dest_poses.shape[1]} target slots, got {success_positions.max_targets}."
-            )
+            raise ValueError(f"Expected {self.dest_poses.shape[1]} target slots, got {success_positions.max_targets}.")
 
         if env_ids is None:
             env_ids_tensor = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
@@ -442,9 +457,7 @@ class ArcStateMachine:
         missing_reserve_stacks = active_targets & (stack_indices < 0)
         if torch.any(missing_reserve_stacks):
             missing_arc_color_ids = torch.unique(arc_color_ids[missing_reserve_stacks]).tolist()
-            raise ValueError(
-                f"Success targets use ARC color IDs without reserve cube stacks: {missing_arc_color_ids}."
-            )
+            raise ValueError(f"Success targets use ARC color IDs without reserve cube stacks: {missing_arc_color_ids}.")
 
         # The pose orientation is initialized once in ``__init__``. Entries past
         # ``dest_counts`` are intentionally left untouched because Warp never
@@ -512,11 +525,53 @@ class ArcStateMachine:
             raise KeyError(f"No reserve stack is assigned ARC color ID {arc_color_id} for environment {env_id}.")
         return stack_index, int(self.reserve_cube_indices[env_id, stack_index].item())
 
-    def compute(self, ee_pose: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def compute_action_metadata(self) -> torch.Tensor:
+        """Derive control mode, plan ID, and attachment slot from the current ARC state.
+
+        The returned columns are ``[control_mode, plan_id, attachment_stack,
+        attachment_cube]``. A state value is a sufficient plan ID because every
+        cuRobo state transition changes the goal, while returning to the same
+        state necessarily passes through a DiffIK state and therefore starts a
+        fresh request in the hybrid action term.
+        """
+        states = self.sm_state.to(dtype=torch.long)
+        metadata = torch.full((self.num_envs, 4), -1.0, dtype=torch.float32, device=self.device)
+
+        curobo_mask = (
+            (states == ArcStates.APPROACHING_ABOVE.python_value)
+            | (states == ArcStates.APPROACHING.python_value)
+            | (states == ArcStates.APPROACHING_PLACING_ABOVE.python_value)
+        )
+        metadata[:, 0] = curobo_mask.to(metadata.dtype) * ArcControlMode.CUROBO.value
+        metadata[:, 1] = states.to(metadata.dtype)
+
+        attached_mask = (
+            (states == ArcStates.APPROACHING_PLACING_ABOVE.python_value)
+            | (states == ArcStates.APPROACHING_PLACING.python_value)
+            | (states == ArcStates.PLACING.python_value)
+        )
+        attached_env_ids = torch.nonzero(attached_mask, as_tuple=False).flatten()
+        if attached_env_ids.numel() > 0:
+            goal_indices = self.current_idx_objects[attached_env_ids].to(dtype=torch.long)
+            color_ids = self.dest_arc_color_ids[attached_env_ids, goal_indices].to(dtype=torch.long)
+            stack_indices = self.color_to_stack[attached_env_ids, color_ids].to(dtype=torch.long)
+            cube_indices = self.reserve_cube_indices[attached_env_ids, stack_indices].to(dtype=torch.long)
+            metadata[attached_env_ids, 2] = stack_indices.to(metadata.dtype)
+            metadata[attached_env_ids, 3] = cube_indices.to(metadata.dtype)
+
+        return metadata
+
+    def compute(
+        self,
+        ee_pose: torch.Tensor,
+        transition_allowed: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute the next desired end-effector pose and gripper state based on the current state of the environment.
 
         Args:
             ee_pose (torch.Tensor): Current end-effector pose (num_envs, 7).
+            transition_allowed: Per-environment permission to leave the current
+                state. ``None`` preserves the original, always-allow behavior.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor]: Desired end-effector pose (num_envs, 7) and gripper state (num_envs, 1) concatenated along the last dimension, and the current arc state.
@@ -524,6 +579,15 @@ class ArcStateMachine:
 
         if ee_pose.ndim != 2 or ee_pose.shape[0] != self.num_envs or ee_pose.shape[1] != 7:
             raise ValueError(f"Expected ee_pose shape ({self.num_envs}, 7), got {tuple(ee_pose.shape)}")
+        if transition_allowed is None:
+            transition_allowed = torch.ones((self.num_envs,), dtype=torch.int32, device=self.device)
+        else:
+            if transition_allowed.ndim != 1 or transition_allowed.shape[0] != self.num_envs:
+                raise ValueError(
+                    f"Expected transition_allowed shape ({self.num_envs},), got {tuple(transition_allowed.shape)}"
+                )
+            transition_allowed = transition_allowed.to(device=self.device, dtype=torch.int32)
+        transition_allowed_wp = wp.from_torch(transition_allowed, wp.int32)
 
         if self.debug_shapes:
             self._log_shape("ee_pose_input", ee_pose)
@@ -547,6 +611,7 @@ class ArcStateMachine:
             inputs=[
                 self.sm_state_wp,
                 self.sm_wait_time_wp,
+                transition_allowed_wp,
                 ee_pose_wp,
                 self.rest_pose_wp,
                 self.rest_pose_initialized_wp,

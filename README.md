@@ -72,6 +72,21 @@ It allows you to develop in an isolated environment, outside of the core Isaac L
             python scripts/random_agent.py --task=<TASK_NAME>
             ```
 
+### Weights & Biases monitoring
+
+The ARC state-machine agent can mirror its stdout progress and episode-completion
+statistics to Weights & Biases. Authenticate once in the Apptainer environment
+with `wandb login`, then enable tracking for a run:
+
+```bash
+python scripts/arc_state_machine_agent.py --task=<TASK_NAME> --track \
+    --wandb-project-name=<PROJECT> --wandb-entity=<ENTITY>
+```
+
+For an HPC job without outbound network access, use `--wandb-mode offline` and
+later run `wandb sync` from a machine that can reach Weights & Biases. Without
+`--track`, the agent's behavior and stdout logging are unchanged.
+
 ### Set up IDE (Optional)
 
 To setup the IDE, please follow these instructions:
