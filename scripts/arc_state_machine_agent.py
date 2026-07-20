@@ -11,7 +11,6 @@
 import sys
 import os
 import time
-from datetime import datetime
 from typing import cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,6 +37,7 @@ simulation_app = app_launcher.app
 import gymnasium as gym
 import torch
 
+from arc_wandb_logger import ArcWandbLogger
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 from env_cfg import configure_env
@@ -49,38 +49,6 @@ from era_bench.tasks.manager_based.arc_embodied.ik_watchdog import ArcIKWatchdog
 from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
 from era_bench.tasks.manager_based.arc_embodied.era_bench_env import EraBenchEnv
 import era_bench.tasks  # noqa: F401
-
-
-def _init_wandb(env: EraBenchEnv):
-    """Initialize optional W&B tracking after Isaac Sim and the environment are ready."""
-    if not args_cli.track:
-        return None
-
-    try:
-        import wandb
-    except ImportError as error:
-        raise ImportError(
-            "W&B tracking was requested, but the 'wandb' package is unavailable. "
-            "Install the ERA Bench package dependencies in the Apptainer image."
-        ) from error
-
-    run_name = args_cli.wandb_name or f"{args_cli.task}-{datetime.now():%Y%m%d-%H%M%S}"
-    init_kwargs = {
-        "project": args_cli.wandb_project_name,
-        "entity": args_cli.wandb_entity,
-        "name": run_name,
-        "config": {
-            "task": args_cli.task,
-            "num_envs": env.num_envs,
-            "device": str(env.device),
-            "max_steps": args_cli.max_steps,
-            "sim_dt": env.cfg.sim.dt,
-            "decimation": env.cfg.decimation,
-        },
-    }
-    if args_cli.wandb_mode is not None:
-        init_kwargs["mode"] = args_cli.wandb_mode
-    return wandb.init(**init_kwargs)
 
 
 def main():
@@ -105,7 +73,6 @@ def main():
     print(f"[INFO]: Gym action space: {env.action_space}")
     # reset environment
     env.reset()
-    wandb_run = _init_wandb(env)
     hybrid_arm_action = env.action_manager.get_term("arm_actions")
     if env.action_space.shape is None:
         raise ValueError("Expected action space to be continuous, but got: {env.action_space}")
@@ -138,11 +105,11 @@ def main():
 
     # simulate environment
     step = 0
+    wandb_logger = ArcWandbLogger(args_cli, env)
     start = time.time()
     timestamps = torch.full((env.num_envs,), start, dtype=torch.float64, device=env.device)
     recovery_active_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     while simulation_app.is_running():
-        wandb_metrics: dict[str, float | int] = {}
         # run everything in inference mode
         with torch.inference_mode():
             # warmup
@@ -205,13 +172,13 @@ def main():
 
         recovery_active_mask = recovery_active_mask.clone()
 
+        done_env_ids = torch.where(dones)[0]
         if dones.any():
-            print(f"[INFO]: Resetting environments {torch.where(dones)[0].tolist()} after episode completion.")
-            done_env_ids = torch.where(dones)[0]
+            print(f"[INFO]: Resetting environments {done_env_ids.tolist()} after episode completion.")
             place_above_watchdog.reset(done_env_ids)
             place_above_recovery.reset(done_env_ids)
             recovery_active_mask[done_env_ids] = False
-            arc_sm.reset_idx(torch.where(dones)[0].tolist())
+            arc_sm.reset_idx(done_env_ids.tolist())
             arc_sm.update_reserve_cube_stacks(env.reserve_cube_stacks, done_env_ids)
             arc_sm.update_success_positions(env.success_positions, done_env_ids)
             end_time = time.time()
@@ -219,28 +186,13 @@ def main():
             print(
                 f"[INFO]: Episode completed for envs {done_env_ids.tolist()} in {elapsed_times.tolist()} seconds. Resetting..."
             )
-            wandb_metrics["simulation/episode_completions"] = done_env_ids.numel()
-            wandb_metrics["simulation/episode_duration_mean_s"] = elapsed_times.mean().item()
             timestamps[done_env_ids] = end_time
 
-        elapsed_s = time.time() - start
+        elapsed_s, env_steps_per_s, physics_steps_per_s = wandb_logger.update(step, done_env_ids.tolist())
         print(
-            f"[INFO]: Step: {step}, Total time elapsed: {elapsed_s:.2f} seconds"
+            f"[INFO]: Step: {step}, Total time elapsed: {elapsed_s:.2f} seconds, "
+            f"Environment steps/s: {env_steps_per_s:.2f}, Physics steps/s: {physics_steps_per_s:.2f}"
         )
-        if wandb_run is not None:
-            wandb_metrics.update(
-                {
-                    "simulation/elapsed_s": elapsed_s,
-                    "simulation/steps_per_s": (step + 1) / elapsed_s if elapsed_s else 0.0,
-                    "simulation/done_envs": dones.sum().item(),
-                    "simulation/recovery_active_envs": recovery_active_mask.sum().item(),
-                }
-            )
-            for state in ArcStates:
-                wandb_metrics[f"simulation/state/{state.name.lower()}"] = (
-                    arc_state == state.python_value
-                ).sum().item()
-            wandb_run.log(wandb_metrics, step=step)
         step += 1
         if step >= args_cli.max_steps:
             print(f"[INFO]: Reached max steps: {args_cli.max_steps}. Exiting...")
@@ -250,10 +202,7 @@ def main():
     env.close()
     end = time.time()
     print(f"[INFO]: Total simulation time: {end - start:.2f} seconds")
-    if wandb_run is not None:
-        wandb_run.summary["simulation/total_steps"] = step
-        wandb_run.summary["simulation/total_time_s"] = end - start
-        wandb_run.finish()
+    wandb_logger.finish()
 
 
 if __name__ == "__main__":

@@ -74,8 +74,9 @@ It allows you to develop in an isolated environment, outside of the core Isaac L
 
 ### Weights & Biases monitoring
 
-The ARC state-machine agent can mirror its stdout progress and episode-completion
-statistics to Weights & Biases. Authenticate once in the Apptainer environment
+The ARC state-machine agent can mirror its throughput plus ARC task lifecycle to
+Weights & Biases: active task/pair assignments, completed pairs, retries, and
+completed or failed task IDs. Authenticate once in the Apptainer environment
 with `wandb login`, then enable tracking for a run:
 
 ```bash
@@ -86,6 +87,10 @@ python scripts/arc_state_machine_agent.py --task=<TASK_NAME> --track \
 For an HPC job without outbound network access, use `--wandb-mode offline` and
 later run `wandb sync` from a machine that can reach Weights & Biases. Without
 `--track`, the agent's behavior and stdout logging are unchanged.
+
+Throughput distinguishes environment steps, physics steps (environment steps
+times decimation), parallel environment samples, and simulated-time real-time
+factor.
 
 ### Set up IDE (Optional)
 
