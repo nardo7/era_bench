@@ -79,9 +79,11 @@ def _task_grid_colors(task_grid_pairs: list[GridPair], grid: str, device: torch.
 def _set_reserve_cube_color(
     env: EraBenchEnv, env_id: int, stack_index: int, cube_index: int, arc_color_id: int
 ) -> None:
-    """Set a reserve cube's color through the scene configuration's shader lookup."""
+    """Set a reserve cube's rendered color and color-aware semantic class."""
     shader = env.cfg.scene.get_reserve_cube_shader(env_id, stack_index, cube_index)
     shader.GetAttribute("inputs:diffuseColor").Set(Gf.Vec3f(*COLOR_RGB[ARC_COLOR_TO_COLOR[arc_color_id]]))
+    semantics = env.cfg.scene.get_reserve_cube_semantics(env_id, stack_index, cube_index)
+    semantics.GetSemanticDataAttr().Set(env.cfg.scene.get_cube_semantic_label(arc_color_id))
 
 
 def reset_reserve_cube_stacks(env: EraBenchEnv, env_ids: list[int] | torch.Tensor) -> None:

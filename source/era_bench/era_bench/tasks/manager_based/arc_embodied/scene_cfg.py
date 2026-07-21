@@ -1,4 +1,5 @@
 from dataclasses import MISSING
+import math
 
 from isaaclab.utils import configclass
 from isaaclab.scene import InteractiveSceneCfg
@@ -10,8 +11,34 @@ from isaaclab.sim.utils import get_current_stage
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG, FRANKA_PANDA_CFG  # isort: skip
 from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, Colors
+from pxr import Semantics
 
 FRANKA_GRASP_CENTER_OFFSET = (0.0, 0.0, 0.1034)
+
+
+def _linear_rgb_to_srgb_rgba8(linear_rgb: tuple[float, float, float]) -> tuple[int, int, int, int]:
+    """Convert the canonical linear ARC material color to an 8-bit segmentation color."""
+
+    def to_srgb8(channel: float) -> int:
+        srgb = 12.92 * channel if channel <= 0.0031308 else 1.055 * math.pow(channel, 1.0 / 2.4) - 0.055
+        return round(255 * srgb)
+
+    return (*map(to_srgb8, linear_rgb), 255)
+
+
+SEMANTIC_SEGMENTATION_MAPPING = {
+    **{
+        f"class:cube_{color.value}": _linear_rgb_to_srgb_rgba8(COLOR_RGB[color])
+        for color in ARC_COLOR_TO_COLOR.values()
+    },
+    "class:cube_unassigned": (80, 80, 80, 255),
+    "class:table": (255, 237, 218, 255),
+    "class:ground": (100, 100, 100, 255),
+    "class:robot": (204, 110, 248, 255),
+    "class:UNLABELLED": (150, 150, 150, 255),
+    "class:BACKGROUND": (0, 0, 0, 255),
+}
+"""Stable RGBA legend used by every colorized semantic-segmentation camera."""
 
 
 @configclass
@@ -25,7 +52,11 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         update_period=0.0,
         height=112,
         width=112,
-        data_types=["rgb"],
+        data_types=["rgb", "distance_to_image_plane", "semantic_segmentation"],
+        depth_clipping_behavior="max",
+        semantic_filter=["class"],
+        colorize_semantic_segmentation=True,
+        semantic_segmentation_mapping=SEMANTIC_SEGMENTATION_MAPPING,
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=27.294820675, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 2)
         ),
@@ -39,7 +70,11 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         update_period=0.0,
         height=252,
         width=336,
-        data_types=["rgb"],
+        data_types=["rgb", "distance_to_image_plane", "semantic_segmentation"],
+        depth_clipping_behavior="max",
+        semantic_filter=["class"],
+        colorize_semantic_segmentation=True,
+        semantic_segmentation_mapping=SEMANTIC_SEGMENTATION_MAPPING,
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0, focus_distance=2.4, horizontal_aperture=18.43, clipping_range=(0.1, 5.0)
         ),
@@ -213,6 +248,12 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     def _cube_visual_material(self, color: Colors) -> sim_utils.PreviewSurfaceCfg:
         return sim_utils.PreviewSurfaceCfg(diffuse_color=COLOR_RGB[color])
 
+    def get_cube_semantic_label(self, arc_color: int) -> str:
+        """Return the color-aware semantic class used for an ARC cube."""
+        if arc_color not in ARC_COLOR_TO_COLOR:
+            raise ValueError(f"Unsupported ARC colour ID: {arc_color}")
+        return f"cube_{ARC_COLOR_TO_COLOR[arc_color].value}"
+
     def initialize_reserve_cubes(self) -> None:
 
         reserve_cube_rigid_props = sim_utils.RigidBodyPropertiesCfg(
@@ -242,7 +283,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                         prim_path="{ENV_REGEX_NS}/" + cube_name,
                         spawn=sim_utils.CuboidCfg(
                             size=self.cubes_size,
-                            semantic_tags=[("class", cube_name)],
+                            semantic_tags=[("class", "cube_unassigned")],
                             rigid_props=reserve_cube_rigid_props,
                             collision_props=reserve_cube_collision_props,
                             mass_props=reserve_cube_mass_props,
@@ -268,7 +309,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                         prim_path="{ENV_REGEX_NS}/" + cube_name,
                         spawn=sim_utils.CuboidCfg(
                             size=self.cubes_size,
-                            semantic_tags=[("class", cube_name)],
+                            semantic_tags=[("class", self.get_cube_semantic_label(arc_color))],
                             rigid_props=input_cube_rigid_props,
                             # No collision_props: input cubes are visual references only.
                             visual_material=self._cube_visual_material(color),
@@ -293,6 +334,18 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         if not shader.IsValid():
             raise RuntimeError(f"Reserve cube shader does not exist: {shader_path}")
         return shader
+
+    def get_reserve_cube_semantics(self, env_id: int, stack_index: int, cube_index: int):
+        """Return the class semantics API for one environment-local reserve cube."""
+        cube_name = self.get_reserve_cube_name(stack_index, cube_index)
+        cube_path = f"/World/envs/env_{env_id}/{cube_name}"
+        cube_prim = get_current_stage().GetPrimAtPath(cube_path)
+        if not cube_prim.IsValid():
+            raise RuntimeError(f"Reserve cube prim does not exist: {cube_path}")
+        semantics = Semantics.SemanticsAPI(cube_prim, "class_cube_unassigned")
+        if not semantics.GetSemanticDataAttr().IsValid():
+            raise RuntimeError(f"Reserve cube class semantics do not exist: {cube_path}")
+        return semantics
 
     def get_input_grid_cube_name(self, arc_color: int, index: int) -> str:
         """Return the pooled input-cube name for an ARC colour ID and zero-based slot."""

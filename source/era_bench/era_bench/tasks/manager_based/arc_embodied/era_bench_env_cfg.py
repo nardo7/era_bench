@@ -82,12 +82,44 @@ class ObservationsCfg:
         table_cam = ObsTerm(
             func=mdp.image, params={"sensor_cfg": SceneEntityCfg("table_cam"), "data_type": "rgb", "normalize": False}
         )
+        table_cam_depth = ObsTerm(
+            func=mdp.image,
+            params={
+                "sensor_cfg": SceneEntityCfg("table_cam"),
+                "data_type": "distance_to_image_plane",
+                "normalize": False,
+            },
+        )
+        table_cam_semantic_segmentation = ObsTerm(
+            func=mdp.image,
+            params={
+                "sensor_cfg": SceneEntityCfg("table_cam"),
+                "data_type": "semantic_segmentation",
+                "normalize": False,
+            },
+        )
         origin_top_cam = ObsTerm(
             func=mdp.image,
             params={"sensor_cfg": SceneEntityCfg("origin_top_cam"), "data_type": "rgb", "normalize": False},
         )
         wrist_cam = ObsTerm(
             func=mdp.image, params={"sensor_cfg": SceneEntityCfg("wrist_cam"), "data_type": "rgb", "normalize": False}
+        )
+        wrist_cam_depth = ObsTerm(
+            func=mdp.image,
+            params={
+                "sensor_cfg": SceneEntityCfg("wrist_cam"),
+                "data_type": "distance_to_image_plane",
+                "normalize": False,
+            },
+        )
+        wrist_cam_semantic_segmentation = ObsTerm(
+            func=mdp.image,
+            params={
+                "sensor_cfg": SceneEntityCfg("wrist_cam"),
+                "data_type": "semantic_segmentation",
+                "normalize": False,
+            },
         )
 
         def __post_init__(self) -> None:
