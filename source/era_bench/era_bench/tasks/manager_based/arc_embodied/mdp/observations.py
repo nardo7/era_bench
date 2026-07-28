@@ -184,7 +184,7 @@ def objects_placed(
         lower_pos_w = lower_object.data.root_pos_w.unsqueeze(1)
     elif isinstance(lower_object, XFormPrim):
         pos, _ = lower_object.get_world_poses()
-        lower_pos_w = torch.tensor(pos, device=upper_pos_w.device, dtype=upper_pos_w.dtype).unsqueeze(
+        lower_pos_w = torch.as_tensor(pos, device=upper_pos_w.device, dtype=upper_pos_w.dtype).unsqueeze(
             0
         ) + env.scene.env_origins.unsqueeze(1)
     else:

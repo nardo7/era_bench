@@ -2,19 +2,21 @@
 """Copy an ERA Bench dataset without hidden input-grid reference cubes.
 
 Unused input-grid cube slots are reset to local ``z = -10``.  The recorder
-stores those slots in every demonstration's initial state, even though they
-are not visible in the scene.  This script removes only the corresponding
-``initial_state/rigid_object/input_grid_cube_*`` groups whose recorded poses
-are below ``--hidden-z-max``.  All non-input-grid objects and all other HDF5
-data are copied unchanged.
+stores those slots in both the initial state and every recorded ``states``
+step, even though they are not visible in the scene.  This script removes the
+corresponding ``rigid_object/input_grid_cube_*`` groups from both locations
+when their recorded state poses are below ``--hidden-z-max``.  All non-input-grid
+objects and all other HDF5 data are copied unchanged.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
 
 import h5py
 import numpy as np
@@ -32,82 +34,131 @@ def _demo_sort_key(name: str) -> tuple[int, str]:
 
 
 def is_hidden_input_grid_cube(cube_group: h5py.Group, hidden_z_max: float) -> bool:
-    """Return whether every recorded root-pose position is below the threshold.
+    """Return whether the cube's recorded state pose is below the threshold.
 
-    Requiring every pose to be hidden prevents a malformed or time-varying
-    recording from losing a cube that was visible at any recorded instant.
+    Input-grid cubes are kinematic and remain fixed throughout an episode, so
+    reading the first state avoids loading their full per-step pose datasets.
     """
     root_pose = cube_group.get(ROOT_POSE_DATASET)
     if not isinstance(root_pose, h5py.Dataset):
         return False
-    if root_pose.ndim == 0 or root_pose.shape[-1] < 3:
+    if root_pose.ndim == 0 or root_pose.shape[0] == 0 or root_pose.shape[-1] < 3:
         raise ValueError(f"{cube_group.name}/{ROOT_POSE_DATASET} must end in an xyz pose, got {root_pose.shape}")
 
-    z_positions = root_pose[..., 2]
-    return bool(np.all(np.isfinite(z_positions)) and np.all(z_positions <= hidden_z_max))
+    z_position = root_pose[0, ..., 2]
+    return bool(np.all(np.isfinite(z_position)) and np.all(z_position <= hidden_z_max))
 
 
-def find_hidden_input_grid_cubes(dataset: h5py.File, hidden_z_max: float) -> dict[str, list[str]]:
-    """Return hidden input-grid cube paths grouped by demonstration name."""
+def clean_hidden_input_grid_cubes(
+    dataset: h5py.File, hidden_z_max: float, dry_run: bool
+) -> tuple[int, int, int]:
+    """Scan state objects once and immediately remove hidden cubes when enabled."""
     data_group = dataset.get("data")
     if not isinstance(data_group, h5py.Group):
         raise ValueError(f"dataset has no /data group: {dataset.filename}")
 
-    hidden_by_demo: dict[str, list[str]] = {}
-    for demo_name in sorted(data_group, key=_demo_sort_key):
+    demo_names = sorted(data_group, key=_demo_sort_key)
+    demos_with_removals = 0
+    hidden_cube_count = 0
+    total_cube_count = 0
+    for demo_index, demo_name in enumerate(demo_names, start=1):
         demo_group = data_group[demo_name]
         if not isinstance(demo_group, h5py.Group):
             continue
-        rigid_objects = demo_group.get("initial_state/rigid_object")
-        if not isinstance(rigid_objects, h5py.Group):
+        state_objects = demo_group.get("states/rigid_object")
+        if not isinstance(state_objects, h5py.Group):
             continue
 
-        hidden_names = [
-            object_name
-            for object_name, object_group in rigid_objects.items()
-            if object_name.startswith(INPUT_GRID_CUBE_PREFIX)
-            and isinstance(object_group, h5py.Group)
-            and is_hidden_input_grid_cube(object_group, hidden_z_max)
-        ]
-        if hidden_names:
-            hidden_by_demo[demo_name] = sorted(hidden_names)
-    return hidden_by_demo
+        cube_names = sorted(name for name in state_objects if name.startswith(INPUT_GRID_CUBE_PREFIX))
+        demo_hidden_count = 0
+        for cube_name in cube_names:
+            cube_group = state_objects[cube_name]
+            if not isinstance(cube_group, h5py.Group):
+                continue
+            total_cube_count += 1
+            if not is_hidden_input_grid_cube(cube_group, hidden_z_max):
+                continue
+
+            demo_hidden_count += 1
+            hidden_cube_count += 1
+            if not dry_run:
+                initial_objects = demo_group.get("initial_state/rigid_object")
+                if isinstance(initial_objects, h5py.Group) and cube_name in initial_objects:
+                    del initial_objects[cube_name]
+                del state_objects[cube_name]
+
+        if demo_hidden_count:
+            demos_with_removals += 1
+        print(
+            f"[scan {demo_index}/{len(demo_names)}] {demo_name}: "
+            f"{demo_hidden_count} hidden input-grid cube(s) out of {len(cube_names)}"
+        )
+
+    return demos_with_removals, hidden_cube_count, total_cube_count
+
+
+def compact_hdf5_file(dataset_path: Path) -> None:
+    """Repack the dataset so space from deleted HDF5 objects is released."""
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{dataset_path.stem}_repacked_", suffix=".hdf5", dir=dataset_path.parent
+    )
+    os.close(file_descriptor)
+    temporary_path = Path(temporary_name)
+    temporary_path.unlink()
+    size_before = dataset_path.stat().st_size
+    print(f"[compact] Repacking {dataset_path}; this may take a while...", flush=True)
+    try:
+        with h5py.File(dataset_path, "r") as source, h5py.File(temporary_path, "w") as compacted:
+            for attribute_name, value in source.attrs.items():
+                compacted.attrs[attribute_name] = value
+            for name in source:
+                if name != "data":
+                    source.copy(name, compacted)
+
+            source_data = source["data"]
+            compacted_data = compacted.create_group("data")
+            for attribute_name, value in source_data.attrs.items():
+                compacted_data.attrs[attribute_name] = value
+            demo_names = sorted(source_data, key=_demo_sort_key)
+            for demo_index, demo_name in enumerate(demo_names, start=1):
+                source_data.copy(demo_name, compacted_data)
+                print(f"[compact {demo_index}/{len(demo_names)}] {demo_name}", flush=True)
+        shutil.copymode(dataset_path, temporary_path)
+        os.replace(temporary_path, dataset_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    size_after = dataset_path.stat().st_size
+    print(f"[compact] {size_before / 1024**3:.2f} GiB -> {size_after / 1024**3:.2f} GiB")
 
 
 def remove_hidden_input_grid_cubes(
     input_path: Path, output_path: Path, hidden_z_max: float, dry_run: bool = False
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Copy ``input_path`` to ``output_path`` and remove hidden cube groups.
 
-    Returns ``(demo_count_with_removals, removed_cube_count)``.  The source is
-    never modified; use an explicit output path for a recoverable cleanup.
+    Returns ``(demo_count_with_removals, hidden_cube_count, total_cube_count)``.
+    The source is never modified.
     """
-    if input_path.resolve() == output_path.resolve():
-        raise ValueError("--output must differ from --input; the source dataset is never modified")
     if not input_path.is_file():
         raise FileNotFoundError(f"dataset does not exist: {input_path}")
-    if output_path.exists():
-        raise FileExistsError(f"refusing to overwrite existing output dataset: {output_path}")
+    dataset_path = input_path
+    mode = "r"
+    if not dry_run:
+        if input_path.resolve() == output_path.resolve():
+            raise ValueError("--output must differ from --input; the source dataset is never modified")
+        if output_path.exists():
+            raise FileExistsError(f"refusing to overwrite existing output dataset: {output_path}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[copy] {input_path} -> {output_path}")
+        shutil.copy2(input_path, output_path)
+        dataset_path = output_path
+        mode = "r+"
 
-    with h5py.File(input_path, "r") as source:
-        hidden_by_demo = find_hidden_input_grid_cubes(source, hidden_z_max)
-
-    demo_count = len(hidden_by_demo)
-    removed_count = sum(len(names) for names in hidden_by_demo.values())
-    for demo_name, object_names in hidden_by_demo.items():
-        print(f"[remove] /data/{demo_name}/initial_state/rigid_object: {len(object_names)} hidden input-grid cube(s)")
-
-    if dry_run:
-        return demo_count, removed_count
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(input_path, output_path)
-    with h5py.File(output_path, "r+") as output:
-        for demo_name, object_names in hidden_by_demo.items():
-            rigid_objects = output[f"data/{demo_name}/initial_state/rigid_object"]
-            for object_name in object_names:
-                del rigid_objects[object_name]
-    return demo_count, removed_count
+    with h5py.File(dataset_path, mode) as dataset:
+        result = clean_hidden_input_grid_cubes(dataset, hidden_z_max, dry_run)
+    if not dry_run:
+        compact_hdf5_file(dataset_path)
+    return result
 
 
 def parse_args() -> argparse.Namespace:
@@ -119,7 +170,7 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_HIDDEN_Z_MAX,
         help=(
-            "Remove input-grid cubes only when all recorded root-pose z values are at or below this value "
+            "Remove input-grid cubes when their recorded state root-pose z is at or below this value "
             f"(default: {DEFAULT_HIDDEN_Z_MAX:g}; reset-hidden cubes are at z=-10)"
         ),
     )
@@ -129,11 +180,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    demos, cubes = remove_hidden_input_grid_cubes(
+    demos, hidden_cubes, total_cubes = remove_hidden_input_grid_cubes(
         args.input, args.output, args.hidden_z_max, dry_run=args.dry_run
     )
     action = "Would remove" if args.dry_run else "Removed"
-    print(f"{action} {cubes} hidden input-grid cube(s) across {demos} demonstration(s).")
+    print(
+        f"{action} {hidden_cubes} hidden input-grid cube(s) out of {total_cubes} "
+        f"input-grid cubes across {demos} demonstration(s)."
+    )
 
 
 if __name__ == "__main__":

@@ -134,6 +134,8 @@ def main():
             if args_cli.debug:
                 states = [ArcStates(int(state.item())).name for state in arc_state]
                 print(f"[DEBUG]: ArcStateMachine states={states}")
+                print(f"[DEBUG]: TCP rest position={tcp_rest_position}")
+                print(f"[DEBUG]: next_pose={next_pose}")
 
             if recovery_active_mask.any():
                 place_above_watchdog.reset(torch.nonzero(recovery_active_mask, as_tuple=False).flatten())
@@ -158,9 +160,7 @@ def main():
             command[recovery_update.active_mask] = recovery_update.command[recovery_update.active_mask]
             action_metadata = arc_sm.compute_action_metadata()
             action_metadata[recovery_update.request_curobo_env_ids, 0] = ArcControlMode.CUROBO.value
-            actions = torch.cat(
-                (command[:, :7], action_metadata, command[:, 7:8]), dim=1
-            )
+            actions = torch.cat((command[:, :7], action_metadata, command[:, 7:8]), dim=1)
             obs, reward, terminated, truncated, info = env.step(actions)
 
             if terminated is None or truncated is None:

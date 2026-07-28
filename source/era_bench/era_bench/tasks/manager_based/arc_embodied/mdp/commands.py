@@ -38,6 +38,10 @@ class LoadTaskCommandCfg(CommandTermCfg):
     tasks_ids: list[str] | None = None
     task_pairs: list[list[int]] | None = None
     """Ordered raw pair indices to run for each task in ``tasks_ids``."""
+    # TODO: Remove configurable selected-pair queues. ERA Bench runs are expected
+    # to execute every raw pair of each task in order, so ``_task_pair_queue`` is
+    # currently redundant with the task's complete train-and-test pair sequence.
+    # Keep this compatibility surface until that broader refactor is worthwhile.
     resampling_time_range: tuple[float, float] = (1.0e9, 1.0e9)
     retries: int = 3
 
@@ -55,6 +59,7 @@ class LoadTaskCommand(CommandTerm):
     cfg: LoadTaskCommandCfg
     tasks = sort_by_amount_of_output_pixels(get_era_bench_tasks())
     tasks_status: dict[str, TaskStatus] = {}
+    successful_task_pairs: dict[str, set[int]] = {}
     retries_per_task: dict[str, int] = {}
     current_tasks: list[str] = []
     current_task_pair: list[int] = []
@@ -72,6 +77,7 @@ class LoadTaskCommand(CommandTerm):
             )
 
         self.tasks_status = {task.task_id: TaskStatus.NOT_STARTED for task in self.tasks}
+        self.successful_task_pairs = {task.task_id: set() for task in self.tasks}
         self.retries_per_task = {task.task_id: 0 for task in self.tasks}
         self._task_pair_queue = self._resolve_task_pair_queue(cfg.task_pairs)
         self.current_tasks = self._task_queue[: self.num_envs]
@@ -91,12 +97,62 @@ class LoadTaskCommand(CommandTerm):
 
         if isinstance(file_handler, AppendHDF5DatasetFileHandler):
             tasks_ids_pairs_dict = file_handler.get_executed_task_ids_with_pairs()
-            for id, pairs in tasks_ids_pairs_dict.items():
-                if len(pairs) == len(self._tasks_by_id[id].train + self._tasks_by_id[id].test):
-                    self.tasks_status[id] = TaskStatus.COMPLETED
-                if id in self.current_tasks:
-                    self._current_task_pair_position[self.current_tasks.index(id)] = len(pairs) - 1
-                    self.current_task_pair[self.current_tasks.index(id)] = pairs[-1]
+            for task_id, pairs in tasks_ids_pairs_dict.items():
+                if task_id in self.successful_task_pairs:
+                    self.successful_task_pairs[task_id].update(pairs)
+
+        for task_id in self._task_queue:
+            self.tasks_status[task_id] = (
+                TaskStatus.COMPLETED if self._is_task_completed(task_id) else TaskStatus.NOT_STARTED
+            )
+        self._assign_initial_tasks()
+
+    def _is_task_completed(self, task_id: str) -> bool:
+        """Return whether every configured pair for a task has succeeded at least once."""
+        return all(pair_index in self.successful_task_pairs[task_id] for pair_index in self._task_pair_queue[task_id])
+
+    def _get_next_unexecuted_pair(self, task_id: str) -> int | None:
+        """Return the first configured pair that has not yet succeeded."""
+        return next(
+            (
+                pair_index
+                for pair_index in self._task_pair_queue[task_id]
+                if pair_index not in self.successful_task_pairs[task_id]
+            ),
+            None,
+        )
+
+    def _assign_task_to_env(self, env_id: int, task_id: str) -> None:
+        """Assign an unfinished task and its first missing pair to an environment."""
+        next_pair = self._get_next_unexecuted_pair(task_id)
+        if next_pair is None:
+            raise ValueError(f"Cannot assign completed task '{task_id}' to environment {env_id}.")
+
+        self.current_tasks[env_id] = task_id
+        self._current_task_pair_position[env_id] = self._task_pair_queue[task_id].index(next_pair)
+        self.current_task_pair[env_id] = next_pair
+        self._set_task_in_progress(env_id)
+        self.retries_per_task[task_id] = 0
+
+    def _assign_initial_tasks(self) -> None:
+        """Assign distinct unfinished tasks to environments after loading persisted successes."""
+        unfinished_tasks = [
+            task_id for task_id in self._task_queue if self.tasks_status[task_id] == TaskStatus.NOT_STARTED
+        ]
+        assigned_task_ids: set[str] = set()
+        for env_id in range(self.num_envs):
+            if env_id < len(unfinished_tasks):
+                task_id = unfinished_tasks[env_id]
+                self._assign_task_to_env(env_id, task_id)
+            else:
+                # The command has no idle-task representation. Keep any excess
+                # environments on distinct completed tasks rather than assigning
+                # one task to multiple environments.
+                task_id = next(task_id for task_id in self._task_queue if task_id not in assigned_task_ids)
+                self.current_tasks[env_id] = task_id
+                self._current_task_pair_position[env_id] = 0
+                self.current_task_pair[env_id] = self._task_pair_queue[task_id][0]
+            assigned_task_ids.add(task_id)
 
     def _resolve_task_queue(self, task_ids: list[str] | None) -> list[str]:
         """Return the ordered, unique task IDs available to this command term."""
@@ -110,7 +166,12 @@ class LoadTaskCommand(CommandTerm):
         return task_queue
 
     def _resolve_task_pair_queue(self, task_pairs: list[list[int]] | None) -> dict[str, list[int]]:
-        """Return the ordered pair indices to run for every task in the task queue."""
+        """Return the ordered pair indices to run for every task in the task queue.
+
+        This selected-pair abstraction is retained as technical debt. Current ERA
+        Bench scheduling assumes that each queue contains every raw task pair in
+        its original order.
+        """
         if task_pairs is None:
             return {
                 task_id: list(range(len(self._tasks_by_id[task_id].train + self._tasks_by_id[task_id].test)))
@@ -144,8 +205,10 @@ class LoadTaskCommand(CommandTerm):
         self.tasks_status[self.current_tasks[env_id]] = TaskStatus.FAILED
 
     def set_task_completed(self, env_id: int) -> None:
-        """Mark the current task as completed."""
-        self.tasks_status[self.current_tasks[env_id]] = TaskStatus.COMPLETED
+        """Record success for the current pair and trigger its reset-time transition."""
+        task_id = self.current_tasks[env_id]
+        self.successful_task_pairs[task_id].add(self.current_task_pair[env_id])
+        self.tasks_status[task_id] = TaskStatus.COMPLETED
 
     def _set_task_in_progress(self, env_id: int) -> None:
         """Mark the current task as in progress."""
@@ -264,12 +327,12 @@ class LoadTaskCommand(CommandTerm):
     def _transition_to_next_pair(self, env_id: int):
         """Transition to the next pair in the current task for the given environment ID."""
         task_id = self.current_tasks[env_id]
-        next_position = self._current_task_pair_position[env_id] + 1
-        if next_position >= len(self._task_pair_queue[task_id]):
+        next_pair = self._get_next_unexecuted_pair(task_id)
+        if next_pair is None:
             self._transition_to_next_task(env_id)
             return
-        self._current_task_pair_position[env_id] = next_position
-        self.current_task_pair[env_id] = self._task_pair_queue[task_id][next_position]
+        self._current_task_pair_position[env_id] = self._task_pair_queue[task_id].index(next_pair)
+        self.current_task_pair[env_id] = next_pair
         self.retries_per_task[task_id] = 0
         self._set_task_in_progress(env_id)
         print(
@@ -293,17 +356,14 @@ class LoadTaskCommand(CommandTerm):
         )
         next_task_id = self._get_next_task_id()
         if next_task_id is not None:
-            self.current_tasks[env_id] = next_task_id
-            self._current_task_pair_position[env_id] = 0
-            self.current_task_pair[env_id] = self._task_pair_queue[next_task_id][0]
-            self._set_task_in_progress(env_id)
-            self.retries_per_task[next_task_id] = 0
+            self._assign_task_to_env(env_id, next_task_id)
             print(f"[INFO]: Transitioned to next task '{next_task_id}' for environment {env_id}.")
 
     def _get_next_task_id(self) -> str | None:
-        """Get the next task ID that has not been completed or failed."""
+        """Get the next unassigned task that has not been completed or failed."""
+        active_task_ids = set(self.current_tasks)
         for task_id in self._task_queue:
-            if self.tasks_status[task_id] == TaskStatus.NOT_STARTED:
+            if task_id not in active_task_ids and self.tasks_status[task_id] == TaskStatus.NOT_STARTED:
                 return task_id
         return None
 

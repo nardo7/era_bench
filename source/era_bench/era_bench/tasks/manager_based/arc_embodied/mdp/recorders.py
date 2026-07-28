@@ -118,6 +118,14 @@ class ARCTaskPairRecorderTerm(RecorderTerm):
         return list(env_ids)
 
 
+class CameraObservationsRecorderTerm(RecorderTerm):
+    """Record camera observations under ``obs`` without retaining CUDA tensors."""
+
+    def record_pre_step(self) -> tuple[str, dict[str, torch.Tensor]]:
+        camera_obs = cast(dict[str, torch.Tensor], self._env.obs_buf["camera"])
+        return "obs", {name: value.detach().cpu() for name, value in camera_obs.items()}
+
+
 class ARCHighLevelActionsRecorderTerm(RecorderTerm):
 
     _object_grasped: dict[int, list[torch.Tensor]]
@@ -256,6 +264,13 @@ class ARCTaskPairRecorderTermCfg(RecorderTermCfg):
 
 
 @configclass
+class CameraObservationsRecorderTermCfg(RecorderTermCfg):
+    """Configuration for recording camera observations in CPU episode buffers."""
+
+    class_type: type[RecorderTerm] = CameraObservationsRecorderTerm
+
+
+@configclass
 class ARCHighLevelActionsRecorderTermCfg(RecorderTermCfg):
     """Configuration for the ARC high-level action timeline recorder."""
 
@@ -268,6 +283,7 @@ class ARCTaskRecorderManagerCfg(RecorderManagerCfg):
 
     task_recorder_term_cfg = ARCTaskRecorderTermCfg()
     task_pair_recorder_term_cfg = ARCTaskPairRecorderTermCfg()
+    record_pre_step_camera_observations = CameraObservationsRecorderTermCfg()
     high_level_actions_recorder_term_cfg = ARCHighLevelActionsRecorderTermCfg()
     # record_post_step_states = ARCStatesRecorderWrapperCfg(state_recorder_term_cfg=PostStepStatesRecorderCfg())
     # record_initial_state = ARCStatesRecorderWrapperCfg(state_recorder_term_cfg=InitialStateRecorderCfg())

@@ -70,6 +70,12 @@ def _make_command_term(
     command_term._task_pair_queue = {"task-a": [3, 7], "task-b": [2]}
     command_term.current_task_pair = [command_term._task_pair_queue["task-a"][pair_position]]
     command_term.tasks_status = {"task-a": status, "task-b": TaskStatus.NOT_STARTED}
+    command_term.successful_task_pairs = {
+        "task-a": set(command_term._task_pair_queue["task-a"][: pair_position + 1])
+        if status is TaskStatus.COMPLETED
+        else set(),
+        "task-b": set(),
+    }
     command_term.retries_per_task = {"task-a": retries_used, "task-b": 0}
     command_term._task_queue = ["task-a", "task-b"]
     return command_term
@@ -110,13 +116,15 @@ def test_exhausted_failed_pair_skips_remaining_pairs_and_advances_task() -> None
 
 
 def test_completed_pair_advances_to_the_next_pair_not_the_next_task() -> None:
-    command_term = _make_command_term(status=TaskStatus.COMPLETED)
+    command_term = _make_command_term()
+    command_term.set_task_completed(env_id=0)
 
     command_term._resample_command([0])
 
     assert command_term.current_tasks == ["task-a"]
     assert command_term.current_task_pair == [7]
     assert command_term._current_task_pair_position == [1]
+    assert command_term.successful_task_pairs["task-a"] == {3}
     assert command_term.tasks_status["task-a"] is TaskStatus.IN_PROGRESS
     assert command_term.tasks_status["task-b"] is TaskStatus.NOT_STARTED
 
@@ -157,9 +165,9 @@ def test_dataset_handler_reads_nested_task_metadata(tmp_path) -> None:
         handler.close()
 
 
-def test_initialize_from_dataset_marks_only_fully_recorded_tasks_completed(tmp_path) -> None:
+def test_initialize_from_dataset_tracks_unique_pairs_and_resumes_the_first_missing_pair(tmp_path) -> None:
     dataset_path = tmp_path / "dataset.hdf5"
-    _write_task_dataset(dataset_path, [("task-a", 0), ("task-a", 1), ("task-b", 0)])
+    _write_task_dataset(dataset_path, [("task-a", 0), ("task-a", 0), ("task-a", 1), ("task-b", 0)])
 
     handler = AppendHDF5DatasetFileHandler()
     handler.open(str(dataset_path), mode="r+")
@@ -167,7 +175,7 @@ def test_initialize_from_dataset_marks_only_fully_recorded_tasks_completed(tmp_p
         command_term = object.__new__(LoadTaskCommand)
         command_term._debug_vis_handle = None
         command_term._env = SimpleNamespace(
-            recorder_manager=SimpleNamespace(_dataset_file_handler=handler)
+            recorder_manager=SimpleNamespace(_dataset_file_handler=handler), num_envs=1
         )
         command_term._tasks_by_id = {
             "task-a": SimpleNamespace(train=[object(), object()], test=[]),
@@ -180,12 +188,50 @@ def test_initialize_from_dataset_marks_only_fully_recorded_tasks_completed(tmp_p
         command_term.current_tasks = ["task-a"]
         command_term._current_task_pair_position = [0]
         command_term.current_task_pair = [0]
+        command_term._task_queue = ["task-a", "task-b"]
+        command_term._task_pair_queue = {"task-a": [0, 1], "task-b": [0, 1]}
+        command_term.successful_task_pairs = {"task-a": set(), "task-b": set()}
+        command_term.retries_per_task = {"task-a": 0, "task-b": 0}
 
         command_term._initialize_from_dataset()
 
         assert command_term.tasks_status["task-a"] is TaskStatus.COMPLETED
-        assert command_term.tasks_status["task-b"] is TaskStatus.NOT_STARTED
+        assert command_term.tasks_status["task-b"] is TaskStatus.IN_PROGRESS
+        assert command_term.successful_task_pairs == {"task-a": {0, 1}, "task-b": {0}}
+        assert command_term.current_tasks == ["task-b"]
         assert command_term._current_task_pair_position == [1]
+        assert command_term.current_task_pair == [1]
+    finally:
+        handler.close()
+
+
+def test_initialize_from_dataset_does_not_complete_a_task_with_duplicate_pairs(tmp_path) -> None:
+    dataset_path = tmp_path / "dataset.hdf5"
+    # The raw record count matches the pair count, but pair 1 was never successful.
+    _write_task_dataset(dataset_path, [("task-a", 0), ("task-a", 0)])
+
+    handler = AppendHDF5DatasetFileHandler()
+    handler.open(str(dataset_path), mode="r+")
+    try:
+        command_term = object.__new__(LoadTaskCommand)
+        command_term._debug_vis_handle = None
+        command_term._env = SimpleNamespace(
+            recorder_manager=SimpleNamespace(_dataset_file_handler=handler), num_envs=1
+        )
+        command_term._tasks_by_id = {"task-a": SimpleNamespace(train=[object(), object()], test=[])}
+        command_term._task_queue = ["task-a"]
+        command_term._task_pair_queue = {"task-a": [0, 1]}
+        command_term.tasks_status = {"task-a": TaskStatus.NOT_STARTED}
+        command_term.successful_task_pairs = {"task-a": set()}
+        command_term.retries_per_task = {"task-a": 0}
+        command_term.current_tasks = ["task-a"]
+        command_term._current_task_pair_position = [0]
+        command_term.current_task_pair = [0]
+
+        command_term._initialize_from_dataset()
+
+        assert command_term.successful_task_pairs == {"task-a": {0}}
+        assert command_term.tasks_status["task-a"] is TaskStatus.IN_PROGRESS
         assert command_term.current_task_pair == [1]
     finally:
         handler.close()
@@ -223,6 +269,7 @@ def test_resample_processes_all_environments_after_exhausted_failures() -> None:
         "task-c": TaskStatus.NOT_STARTED,
         "task-d": TaskStatus.NOT_STARTED,
     }
+    command_term.successful_task_pairs = {task_id: set() for task_id in command_term._task_queue}
     command_term.retries_per_task = {task_id: 0 for task_id in command_term._task_queue}
 
     command_term._resample_command([0, 1])
@@ -232,3 +279,40 @@ def test_resample_processes_all_environments_after_exhausted_failures() -> None:
     assert command_term.tasks_status["task-b"] is TaskStatus.FAILED
     assert command_term.tasks_status["task-c"] is TaskStatus.IN_PROGRESS
     assert command_term.tasks_status["task-d"] is TaskStatus.IN_PROGRESS
+
+
+def test_initial_assignment_never_assigns_one_task_to_multiple_environments(tmp_path) -> None:
+    dataset_path = tmp_path / "dataset.hdf5"
+    _write_task_dataset(dataset_path, [("task-a", 0), ("task-a", 1), ("task-b", 0)])
+
+    handler = AppendHDF5DatasetFileHandler()
+    handler.open(str(dataset_path), mode="r+")
+    try:
+        command_term = object.__new__(LoadTaskCommand)
+        command_term._debug_vis_handle = None
+        command_term._env = SimpleNamespace(
+            recorder_manager=SimpleNamespace(_dataset_file_handler=handler), num_envs=2
+        )
+        command_term._tasks_by_id = {
+            task_id: SimpleNamespace(train=[object(), object()], test=[])
+            for task_id in ("task-a", "task-b", "task-c", "task-d")
+        }
+        command_term._task_queue = ["task-a", "task-b", "task-c", "task-d"]
+        command_term._task_pair_queue = {task_id: [0, 1] for task_id in command_term._task_queue}
+        command_term.tasks_status = {task_id: TaskStatus.NOT_STARTED for task_id in command_term._task_queue}
+        command_term.successful_task_pairs = {task_id: set() for task_id in command_term._task_queue}
+        command_term.retries_per_task = {task_id: 0 for task_id in command_term._task_queue}
+        command_term.current_tasks = ["task-a", "task-b"]
+        command_term._current_task_pair_position = [0, 0]
+        command_term.current_task_pair = [0, 0]
+
+        command_term._initialize_from_dataset()
+
+        assert command_term.current_tasks == ["task-b", "task-c"]
+        assert len(command_term.current_tasks) == len(set(command_term.current_tasks))
+        assert command_term.current_task_pair == [1, 0]
+        assert command_term.tasks_status["task-a"] is TaskStatus.COMPLETED
+        assert command_term.tasks_status["task-b"] is TaskStatus.IN_PROGRESS
+        assert command_term.tasks_status["task-c"] is TaskStatus.IN_PROGRESS
+    finally:
+        handler.close()

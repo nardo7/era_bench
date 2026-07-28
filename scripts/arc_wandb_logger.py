@@ -13,14 +13,21 @@ from era_bench.tasks.manager_based.arc_embodied.mdp.commands import LoadTaskComm
 
 
 class ArcWandbLogger:
-    """Log simulation throughput and task progress without modifying task commands."""
+    """Render command progress and simulation throughput in W&B."""
 
     def __init__(self, args: Namespace, env: EraBenchEnv) -> None:
         self._env = env
         self._start_time = time.time()
         self._start_env_step = env.common_step_counter
         self._run: Any | None = None
+        self._wandb: Any | None = None
         self._load_task_command: LoadTaskCommand | None = None
+        self._pair_start: dict[int, tuple[str, int, int, int, float]] = {}
+        self._pair_attempt_rows: list[list[Any]] = []
+        self._finished_task_rows: list[list[Any]] = []
+        self._finished_task_ids: set[str] = set()
+        self._task_env_ids: dict[str, int] = {}
+        self._task_pair_stats: dict[str, list[tuple[int, float]]] = {}
 
         if not args.track:
             return
@@ -49,14 +56,26 @@ class ArcWandbLogger:
         }
         if args.wandb_mode is not None:
             init_kwargs["mode"] = args.wandb_mode
+        self._wandb = wandb
         self._run = wandb.init(**init_kwargs)
 
         self._load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
-        self._previous_tasks = list(self._load_task_command.current_tasks)
-        self._previous_pairs = list(self._load_task_command.current_task_pair)
-        self._previous_retries = dict(self._load_task_command.retries_per_task)
+        current_tasks = self._load_task_command.current_tasks
+        current_pairs = self._load_task_command.current_task_pair
+        current_retries = self._load_task_command.retries_per_task
         self._start_time = time.time()
         self._start_env_step = env.common_step_counter
+        self._pair_start = {
+            env_id: (
+                task_id,
+                current_pairs[env_id],
+                current_retries[task_id],
+                env.common_step_counter,
+                self._start_time,
+            )
+            for env_id, task_id in enumerate(current_tasks)
+        }
+        self._task_env_ids = {task_id: env_id for env_id, task_id in enumerate(current_tasks)}
 
     def update(self, step: int, done_env_ids: Sequence[int]) -> tuple[float, float, float]:
         """Log one simulation step and return elapsed, environment-rate, and physics-rate values."""
@@ -68,65 +87,129 @@ class ArcWandbLogger:
         if self._run is None:
             return elapsed_s, env_steps_per_s, physics_steps_per_s
 
-        metrics: dict[str, float | str] = {
+        metrics: dict[str, Any] = {
             "simulation/elapsed_s": elapsed_s,
             "throughput/environment_steps_per_s": env_steps_per_s,
             "throughput/physics_steps_per_s": physics_steps_per_s,
             "throughput/parallel_env_steps_per_s": env_steps_per_s * self._env.num_envs,
             "throughput/realtime_factor": physics_steps_per_s * self._env.physics_dt,
         }
-        if done_env_ids:
-            metrics.update(self._task_progress(done_env_ids))
+        if step == 0 or done_env_ids:
+            metrics.update(self._task_progress(step, done_env_ids))
         self._run.log(metrics, step=step)
         return elapsed_s, env_steps_per_s, physics_steps_per_s
 
-    def _task_progress(self, done_env_ids: Sequence[int]) -> dict[str, str]:
+    def _task_progress(self, step: int, done_env_ids: Sequence[int]) -> dict[str, Any]:
         command = self._load_task_command
-        if command is None:
+        if command is None or self._wandb is None:
             return {}
 
         current_tasks = list(command.current_tasks)
         current_pairs = list(command.current_task_pair)
         current_retries = dict(command.retries_per_task)
         current_statuses = dict(command.tasks_status)
-        events = []
-        for env_id in done_env_ids:
-            old_task = self._previous_tasks[env_id]
-            new_task = current_tasks[env_id]
-            old_pair = self._previous_pairs[env_id]
-            new_pair = current_pairs[env_id]
-            old_retry = self._previous_retries[old_task]
-            new_retry = current_retries[new_task]
-            if old_task != new_task:
-                event = f"task {old_task} {current_statuses[old_task].value}"
-            elif old_pair != new_pair:
-                event = f"task {old_task}, pair {old_pair} completed"
-            elif new_retry > old_retry:
-                event = f"task {new_task}, pair {new_pair} retried"
-            else:
-                event = f"task {old_task}, pair {old_pair} {current_statuses[old_task].value}"
-            events.append(
-                f"env {env_id}: {event}; now task {new_task}, pair {new_pair}, "
-                f"retry {new_retry}/{command.cfg.retries}"
-            )
-
-        current = [
-            f"env {env_id}: task {task_id}, pair {current_pairs[env_id]}, "
-            f"retry {current_retries[task_id]}/{command.cfg.retries}, status {current_statuses[task_id].value}"
+        now = time.time()
+        current_rows = [
+            [
+                env_id,
+                task_id,
+                current_pairs[env_id],
+                current_retries[task_id],
+                current_statuses[task_id].value,
+            ]
             for env_id, task_id in enumerate(current_tasks)
         ]
-        finished_tasks = {
-            task_id: status.value
-            for task_id, status in current_statuses.items()
-            if status.value in {"completed", "failed"}
-        }
-        self._previous_tasks = current_tasks
-        self._previous_pairs = current_pairs
-        self._previous_retries = current_retries
+
+        for env_id in done_env_ids:
+            task_id, pair_index, retry_index, start_step, start_time = self._pair_start[env_id]
+            new_task = current_tasks[env_id]
+            new_pair = current_pairs[env_id]
+            new_retry = current_retries[new_task]
+            task_status = (
+                "completed"
+                if self._env.termination_manager.get_term("success")[env_id].item()
+                else "failed"
+            )
+            retry_scheduled = (
+                task_status == "failed"
+                and task_id == new_task
+                and pair_index == new_pair
+                and new_retry > retry_index
+            )
+            pair_steps = self._env.common_step_counter - start_step
+            pair_time_s = now - start_time
+            self._pair_attempt_rows.append(
+                [
+                    step,
+                    env_id,
+                    task_id,
+                    pair_index,
+                    retry_index,
+                    task_status,
+                    retry_scheduled,
+                    pair_steps,
+                    pair_time_s,
+                ]
+            )
+
+            task_stats = self._task_pair_stats.setdefault(task_id, [])
+            task_stats.append((pair_steps, pair_time_s))
+            self._task_env_ids[new_task] = env_id
+            if current_statuses[new_task].value not in {"completed", "failed"}:
+                self._pair_start[env_id] = (
+                    new_task,
+                    new_pair,
+                    new_retry,
+                    self._env.common_step_counter,
+                    now,
+                )
+
+        for task_id, status in current_statuses.items():
+            if status.value in {"completed", "failed"} and task_id not in self._finished_task_ids:
+                self._finished_task_rows.append(
+                    [step, self._task_env_ids.get(task_id), task_id, status.value]
+                )
+                self._finished_task_ids.add(task_id)
+
+        average_rows = [
+            [
+                task_id,
+                len(values),
+                sum(value[0] for value in values) / len(values),
+                sum(value[1] for value in values) / len(values),
+            ]
+            for task_id, values in self._task_pair_stats.items()
+        ]
         return {
-            "task_progress/events": " | ".join(events),
-            "task_progress/current": " | ".join(current),
-            "task_progress/finished_tasks": str(finished_tasks),
+            "task_progress/current_assignments": self._wandb.Table(
+                columns=["environment", "task", "pair", "retry", "status"], data=current_rows
+            ),
+            "task_progress/pair_attempts": self._wandb.Table(
+                columns=[
+                    "simulation_step",
+                    "environment",
+                    "task",
+                    "pair",
+                    "retry_index",
+                    "status",
+                    "retry_scheduled",
+                    "environment_steps",
+                    "wall_time_s",
+                ],
+                data=self._pair_attempt_rows,
+            ),
+            "task_progress/task_pair_averages": self._wandb.Table(
+                columns=["task", "pair_attempts", "avg_environment_steps", "avg_wall_time_s"],
+                data=average_rows,
+            ),
+            "task_progress/finished_tasks": self._wandb.Table(
+                columns=["simulation_step", "environment", "task", "status"],
+                data=self._finished_task_rows,
+            ),
+            "task_progress/completed_count": sum(
+                row[3] == "completed" for row in self._finished_task_rows
+            ),
+            "task_progress/failed_count": sum(row[3] == "failed" for row in self._finished_task_rows),
         }
 
     def finish(self) -> None:

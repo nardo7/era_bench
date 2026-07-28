@@ -27,8 +27,9 @@ def configure_env(args_cli: Namespace) -> ManagerBasedRLEnvCfg:
 
     env_cfg.env_name = args_cli.task.split(":")[-1]
 
-    # Important: do not concatenate observations if you want recorder to store structured obs.
+    # Keep policy and camera observations structured so recorder terms store named obs/<term> datasets.
     env_cfg.observations.policy.concatenate_terms = False
+    env_cfg.observations.camera.concatenate_terms = False
 
     # Attach the recorder: records actions/states/obs + generates per-episode MP4 videos.
     env_cfg.recorders = env_cfg.recorders

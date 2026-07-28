@@ -79,6 +79,14 @@ class ObservationsCfg:
         eef_quat = ObsTerm(func=mdp.ee_frame_quat)
         gripper_pos = ObsTerm(func=mdp.gripper_pos)
 
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = False
+
+    @configclass
+    class CameraCfg(ObsGroup):
+        """Camera observations recorded to the dataset outside the policy group."""
+
         table_cam = ObsTerm(
             func=mdp.image, params={"sensor_cfg": SceneEntityCfg("table_cam"), "data_type": "rgb", "normalize": False}
         )
@@ -142,6 +150,7 @@ class ObservationsCfg:
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
+    camera: CameraCfg = CameraCfg()
     subtasks: SubTasksCfg = SubTasksCfg()
 
 
@@ -210,7 +219,7 @@ class TerminationsCfg:
 
     reserve_cubes_displaced = DoneTerm(
         func=mdp.reserve_cubes_displaced,
-        params={"displacement_threshold": 0.03},
+        params={"displacement_threshold": 0.04},
     )
 
     no_progress = DoneTerm(
