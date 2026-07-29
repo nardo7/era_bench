@@ -275,19 +275,33 @@ def are_objects_in_success_positions(
         tcp_is_away_from_color_targets = torch.min(tcp_to_color_targets, dim=1).values > 0.05
         success_mask &= tcp_is_away_from_color_targets
 
-    # Do not mark success until the TCP has retreated beyond the front edge of
-    # the populated output grid.  The fixed-capacity target buffer is
-    # zero-padded, so only active slots may contribute to this boundary.
-    # Keeping the TCP 10 cm beyond that edge leaves the wrist camera a clear
-    # view of the completed output before the environment resets.
+    # Keep the TCP on the side of the table-camera/top-left-grid line opposite
+    # the output.  The output grid grows toward +x/+y from its top-left target,
+    # while the table camera is at positive x.  A 15 cm margin covers the
+    # desired 10 cm clearance plus half of the 10.34 cm Panda gripper offset.
+    active_target_x = torch.where(
+        success_positions.active_targets,
+        success_positions.positions_w[..., 0],
+        torch.full_like(success_positions.positions_w[..., 0], torch.inf),
+    )
     active_target_y = torch.where(
         success_positions.active_targets,
         success_positions.positions_w[..., 1],
         torch.full_like(success_positions.positions_w[..., 1], torch.inf),
     )
-    output_grid_front_edge = active_target_y.min(dim=1).values - scene_cfg.cubes_size[1] * 0.5
-    tcp_out_of_grid = (~success_positions.has_targets) | (tcp_position_w[:, 1] < output_grid_front_edge - 0.2)
-    success_mask &= tcp_out_of_grid
+    output_grid_top_left_w = torch.stack((active_target_x.min(dim=1).values, active_target_y.min(dim=1).values), dim=1)
+    table_camera_w = env.scene.env_origins[:, :2] + torch.tensor(
+        scene_cfg.table_cam.offset.pos[:2], device=env.device, dtype=tcp_position_w.dtype
+    )
+    output_grid_top_left_w = torch.where(
+        success_positions.has_targets.unsqueeze(1), output_grid_top_left_w, table_camera_w
+    )
+    camera_to_grid = output_grid_top_left_w - table_camera_w
+    grid_side_normal = torch.stack((camera_to_grid[:, 1], -camera_to_grid[:, 0]), dim=1)
+    signed_tcp_distance = torch.sum(grid_side_normal * (tcp_position_w[:, :2] - output_grid_top_left_w), dim=1)
+    signed_tcp_distance /= torch.linalg.vector_norm(grid_side_normal, dim=1).clamp_min(torch.finfo(tcp_position_w.dtype).eps)
+    tcp_clear_of_table_camera = (~success_positions.has_targets) | (signed_tcp_distance <= -0.15)
+    success_mask &= tcp_clear_of_table_camera
 
     if torch.any(success_mask):
         load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))

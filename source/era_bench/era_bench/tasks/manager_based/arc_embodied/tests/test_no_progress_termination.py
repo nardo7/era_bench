@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import torch
+import pytest
 from isaacsim import SimulationApp
 
 simulation_app = SimulationApp({"headless": True})
@@ -127,28 +128,36 @@ class _FakeCommandManager:
 
 
 class _FakeSuccessEnv:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        target_position: tuple[float, float, float] = (0.0, 0.5, 0.0),
+        tcp_position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> None:
         self.num_envs = 1
         self.device = "cpu"
-        self.scene = _FakeSuccessScene()
+        self.scene = _FakeSuccessScene(tcp_position)
         self.command_manager = _FakeCommandManager()
         self.success_positions = SuccessPositionBuffer(num_envs=1, max_targets=4, device="cpu")
-        self.success_positions.replace(0, torch.tensor([[0.0, 0.5, 0.0]]), torch.tensor([1]))
+        self._target_position = torch.tensor(target_position, dtype=torch.float32)
+        self.success_positions.replace(0, self._target_position.unsqueeze(0), torch.tensor([1]))
         self.success_positions_reached = torch.zeros((1, 4), dtype=torch.bool)
         self.reserve_cube_stacks = SimpleNamespace(color_ids=torch.tensor([[1, 2, 3, 4]], dtype=torch.long))
 
     def get_live_reserve_cube_stack_poses(self):
         poses = torch.zeros((1, 4, 1, 7), dtype=torch.float32)
-        poses[0, 0, 0, :3] = torch.tensor([0.0, 0.5, 0.0])
+        poses[0, 0, 0, :3] = self._target_position
         return poses
 
 
 class _FakeSuccessScene:
-    def __init__(self) -> None:
-        self.cfg = SimpleNamespace(cubes_size=(0.04, 0.04, 0.04))
+    def __init__(self, tcp_position: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> None:
+        self.cfg = SimpleNamespace(
+            cubes_size=(0.04, 0.04, 0.04),
+            table_cam=SimpleNamespace(offset=SimpleNamespace(pos=(1.8, 0.0, 1.7))),
+        )
         self.env_origins = torch.zeros((1, 3), dtype=torch.float32)
         self._frame_data = SimpleNamespace(
-            target_pos_w=torch.tensor([[[0.0, 0.0, 0.0]]], dtype=torch.float32),
+            target_pos_w=torch.tensor(tcp_position, dtype=torch.float32).view(1, 1, 3),
             target_quat_w=torch.tensor([[[1.0, 0.0, 0.0, 0.0]]], dtype=torch.float32),
         )
 
@@ -213,19 +222,57 @@ def test_success_marks_current_task_completed() -> None:
     assert env.command_manager.completed_env_ids == [0]
 
 
-def test_success_waits_until_tcp_is_below_the_populated_output_grid() -> None:
+def test_success_waits_until_tcp_is_clear_of_the_table_camera_grid_line() -> None:
     env = _FakeSuccessEnv()
 
     success = are_objects_in_success_positions(env, distance_threshold=0.015)
 
-    # The target buffer has three zero-padded slots.  They must not make y=0
-    # the grid boundary: y=0 is already 10 cm below the target at y=0.5.
+    # The target buffer has three zero-padded slots.  They must not affect the
+    # top-left grid corner used to form the table-camera boundary line.
     assert success.tolist() == [True]
 
-    env.scene._frame_data.target_pos_w[0, 0, 1] = 0.45
+    # This TCP has a low enough y coordinate for the removed front-edge check,
+    # but remains on the output side of the table-camera boundary line.
+    env.scene._frame_data.target_pos_w[0, 0, :2] = torch.tensor([1.7, 0.0])
     success = are_objects_in_success_positions(env, distance_threshold=0.015)
 
     assert success.tolist() == [False]
+
+
+def test_success_allows_demo_12_final_cube_from_its_reset_tcp_pose() -> None:
+    # Demo 12: final output-cube position and the recorded reset TCP pose.
+    env = _FakeSuccessEnv(
+        target_position=(0.0, 0.5, 0.02),
+        tcp_position=(0.458353, -0.0200575, 0.245913),
+    )
+
+    success = are_objects_in_success_positions(env, distance_threshold=0.015)
+
+    assert success.tolist() == [True]
+    assert env.command_manager.completed_env_ids == [0]
+
+
+@pytest.mark.parametrize(
+    "target_position",
+    [
+        (-0.25, 0.25, 0.02),
+        (0.25, 0.25, 0.02),
+        (-0.25, 0.75, 0.02),
+        (0.25, 0.75, 0.02),
+    ],
+)
+def test_success_allows_reset_tcp_pose_for_each_output_grid_corner(
+    target_position: tuple[float, float, float],
+) -> None:
+    env = _FakeSuccessEnv(
+        target_position=target_position,
+        tcp_position=(0.458353, -0.0200575, 0.245913),
+    )
+
+    success = are_objects_in_success_positions(env, distance_threshold=0.015)
+
+    assert success.tolist() == [True]
+    assert env.command_manager.completed_env_ids == [0]
 
 
 def test_time_out_marks_timed_out_tasks_failed() -> None:

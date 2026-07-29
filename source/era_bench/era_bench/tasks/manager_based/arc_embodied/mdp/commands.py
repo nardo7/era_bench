@@ -50,9 +50,10 @@ class LoadTaskCommand(CommandTerm):
     """
     Command responsible for loading ARC-AGI tasks for the environment.
     The idea is to load one task pair per environment. A failed pair is retried for
-    the configured number of retries; once those retries are exhausted, or when a
-    pair completes, the command advances to the next pair. It advances to the
-    next task only after all selected pairs for the current task have finished.
+    the configured number of retries; once those retries are exhausted, the task
+    remains failed, its remaining pairs are skipped, and the environment advances
+    to the next task. A completed pair advances to the next missing pair, and the
+    task advances only after all selected pairs have completed.
     It requires that the task status is set externally by the done terms.
     """
 

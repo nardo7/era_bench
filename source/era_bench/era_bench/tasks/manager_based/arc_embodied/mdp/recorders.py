@@ -121,9 +121,39 @@ class ARCTaskPairRecorderTerm(RecorderTerm):
 class CameraObservationsRecorderTerm(RecorderTerm):
     """Record camera observations under ``obs`` without retaining CUDA tensors."""
 
+    def __init__(self, cfg: "CameraObservationsRecorderTermCfg", env: EraBenchEnv):
+        super().__init__(cfg, env)
+        self._has_completed_initial_reset = False
+
     def record_pre_step(self) -> tuple[str, dict[str, torch.Tensor]]:
         camera_obs = cast(dict[str, torch.Tensor], self._env.obs_buf["camera"])
         return "obs", {name: value.detach().cpu() for name, value in camera_obs.items()}
+
+    def record_pre_reset(
+        self, env_ids: Sequence[int] | None
+    ) -> tuple[str | None, dict[str, torch.Tensor] | None]:
+        if not self._has_completed_initial_reset:
+            # The initial reset has no completed episode to which a terminal
+            # frame could belong.
+            return None, None
+
+        if env_ids is None:
+            env_ids = list(range(self._env.num_envs))
+        elif isinstance(env_ids, torch.Tensor):
+            env_ids = env_ids.tolist()
+
+        # Termination has already been evaluated, but reset has not started.
+        # Force a render now so the final camera sample reflects the terminal
+        # arm and cube state rather than the previous render interval.
+        self._env.sim.render()
+        camera_obs = cast(
+            dict[str, torch.Tensor], self._env.observation_manager.compute_group("camera")
+        )
+        return "obs", {name: value[env_ids].detach().cpu() for name, value in camera_obs.items()}
+
+    def record_post_reset(self, env_ids: Sequence[int] | None) -> tuple[None, None]:
+        self._has_completed_initial_reset = True
+        return None, None
 
 
 class ARCHighLevelActionsRecorderTerm(RecorderTerm):

@@ -262,7 +262,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
 
         # general settings
-        self.decimation = 5  # 50Hz
+        self.decimation = 5  # 20 Hz control/environment rate at sim.dt=0.01
         self.episode_length_s = 320.0
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
