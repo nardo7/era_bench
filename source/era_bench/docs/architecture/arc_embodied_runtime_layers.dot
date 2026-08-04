@@ -1,0 +1,150 @@
+digraph ArcEmbodiedRuntimeLayers {
+  graph [
+    label="ARC Embodied — Runtime Layered Architecture",
+    labelloc=t,
+    fontsize=22,
+    fontname="Arial",
+    rankdir=TB,
+    bgcolor="white",
+    pad=0.25,
+    nodesep=0.35,
+    ranksep=0.52,
+    splines=polyline,
+    compound=true
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Arial",
+    fontsize=11,
+    color="#334155",
+    penwidth=1.2,
+    margin="0.18,0.11"
+  ];
+
+  edge [
+    fontname="Arial",
+    fontsize=9,
+    color="#475569",
+    fontcolor="#334155",
+    arrowsize=0.75,
+    penwidth=1.1
+  ];
+
+  subgraph cluster_task_control {
+    label="Layer 1 — Task-Level Control";
+    fontsize=15;
+    fontname="Arial";
+    color="#C4B5FD";
+    fillcolor="#F5F3FF";
+    style="rounded,filled";
+
+    state_machine [
+      label="ArcStateMachine",
+      fillcolor="#DDD6FE"
+    ];
+  }
+
+  subgraph cluster_recovery {
+    label="Layer 2 — Recovery Supervision";
+    fontsize=15;
+    fontname="Arial";
+    color="#C4B5FD";
+    fillcolor="#F5F3FF";
+    style="rounded,filled";
+
+    recovery [
+      label="ArcIKWatchdog  +  ArcIKRecoveryPolicy",
+      fillcolor="#EDE9FE"
+    ];
+  }
+
+  subgraph cluster_environment {
+    label="Layer 3 — Environment Integration";
+    fontsize=15;
+    fontname="Arial";
+    color="#93C5FD";
+    fillcolor="#EFF6FF";
+    style="rounded,filled";
+
+    environment [
+      label="EraBenchEnv\nruntime orchestration · ARC integration · shared runtime state",
+      fillcolor="#DBEAFE",
+      penwidth=1.5
+    ];
+  }
+
+  services [
+    label="Layer 4 — ARC Runtime Services (peer manager terms)\nTask Command  ·  Robot Actions  ·  Feedback  ·  Reset Events  ·  ARC Recorders",
+    fillcolor="#BFDBFE",
+    color="#60A5FA",
+    penwidth=1.4
+  ];
+
+  subgraph cluster_scene {
+    label="Layer 5 — Interactive Scene";
+    fontsize=15;
+    fontname="Arial";
+    color="#FCD34D";
+    fillcolor="#FFFBEB";
+    style="rounded,filled";
+
+    scene [
+      label="Franka  ·  reserve cubes  ·  input grid  ·  cameras  ·  end-effector frame",
+      fillcolor="#FEF3C7"
+    ];
+  }
+
+  subgraph cluster_simulation {
+    label="Layer 6 — Simulation Runtime";
+    fontsize=15;
+    fontname="Arial";
+    color="#CBD5E1";
+    fillcolor="#F8FAFC";
+    style="rounded,filled";
+
+    simulation [
+      label="Isaac Sim\nUSD stage  ·  PhysX  ·  rendering  ·  sensors",
+      fillcolor="#E2E8F0"
+    ];
+  }
+
+  persistence [
+    label="Persistence sidecar\nHDF5 successful / failed episodes",
+    shape=cylinder,
+    style=filled,
+    fillcolor="#D1FAE5",
+    color="#059669",
+    penwidth=1.3
+  ];
+
+  state_machine -> recovery [label="desired manipulation"];
+  recovery -> environment [label="selected / recovered action"];
+  environment -> services [label="orchestrates lifecycle"];
+  services -> scene [label="act · reset · observe"];
+  scene -> simulation [label="simulate and render"];
+
+  scene -> services [
+    label="feedback",
+    style=dashed,
+    constraint=false
+  ];
+  services -> state_machine [
+    label="observations + done",
+    style=dashed,
+    constraint=false
+  ];
+
+  services -> persistence [
+    label="episode export",
+    constraint=false
+  ];
+  persistence -> services [
+    label="resume coverage",
+    style=dashed,
+    constraint=false
+  ];
+
+  { rank=same; services; persistence; }
+}

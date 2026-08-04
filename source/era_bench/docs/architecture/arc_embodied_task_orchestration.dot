@@ -1,0 +1,124 @@
+digraph ArcEmbodiedTaskOrchestration {
+  graph [
+    label="ARC Embodied — Task Loading and Execution",
+    labelloc=t,
+    fontsize=21,
+    fontname="Arial",
+    rankdir=TB,
+    bgcolor="white",
+    pad=0.25,
+    nodesep=0.35,
+    ranksep=0.45,
+    splines=polyline
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Arial",
+    fontsize=10.5,
+    color="#334155",
+    penwidth=1.2,
+    margin="0.18,0.11"
+  ];
+
+  edge [
+    color="#64748B",
+    fontname="Arial",
+    fontsize=9,
+    fontcolor="#334155",
+    arrowsize=0.7,
+    penwidth=1.1
+  ];
+
+  startup [
+    label="Startup\nbenchmark queue + successful HDF5 coverage",
+    fillcolor="#E2E8F0"
+  ];
+
+  assign [
+    label="Assign one distinct unfinished task per environment\nselect its first non-completed pair",
+    fillcolor="#DBEAFE",
+    color="#3B82F6"
+  ];
+
+  load [
+    label="Environment reset loads the active pair\nprepare command → input grid / output targets / reserve stacks",
+    fillcolor="#BFDBFE",
+    color="#3B82F6",
+    penwidth=1.5
+  ];
+
+  run [
+    label="Run one task-pair episode",
+    fillcolor="#EDE9FE",
+    color="#8B5CF6"
+  ];
+
+  outcome [
+    label="Episode outcome?",
+    shape=diamond,
+    style=filled,
+    fillcolor="#F8FAFC"
+  ];
+
+  record_success [
+    label="Record successful pair coverage",
+    fillcolor="#D1FAE5",
+    color="#059669"
+  ];
+
+  more_pairs [
+    label="Non-completed pair\nin this task?",
+    shape=diamond,
+    style=filled,
+    fillcolor="#F0FDFA",
+    color="#059669"
+  ];
+
+  next_pair [
+    label="Select first non-completed pair\nreset retry count",
+    fillcolor="#D1FAE5",
+    color="#059669"
+  ];
+
+  retries [
+    label="Retries used\n< 2?",
+    shape=diamond,
+    style=filled,
+    fillcolor="#FFF7ED",
+    color="#F59E0B"
+  ];
+
+  retry_pair [
+    label="Retry same task and pair\nincrement retry count",
+    fillcolor="#FEF3C7",
+    color="#F59E0B"
+  ];
+
+  task_finished [
+    label="Finish current task\nCOMPLETED or FAILED",
+    fillcolor="#E2E8F0"
+  ];
+
+  next_task [
+    label="Assign next NOT_STARTED task\nexclude tasks active in other environments",
+    fillcolor="#DBEAFE",
+    color="#3B82F6"
+  ];
+
+  startup -> assign -> load -> run -> outcome;
+
+  outcome -> record_success [label="success"];
+  record_success -> more_pairs;
+  more_pairs -> next_pair [label="yes"];
+  next_pair -> load;
+  more_pairs -> task_finished [label="no · completed"];
+
+  outcome -> retries [label="failure"];
+  retries -> retry_pair [label="yes"];
+  retry_pair -> load;
+  retries -> task_finished [label="no · failed\nskip remaining pairs"];
+
+  task_finished -> next_task -> load;
+}

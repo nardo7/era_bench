@@ -1,0 +1,68 @@
+digraph ArcEmbodiedTaskSelection {
+  graph [
+    label="ARC Embodied — ARC-AGI Benchmark Selection",
+    labelloc=t,
+    fontsize=21,
+    fontname="Arial",
+    rankdir=LR,
+    bgcolor="white",
+    pad=0.25,
+    nodesep=0.25,
+    ranksep=0.45,
+    splines=polyline
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Arial",
+    fontsize=10.5,
+    color="#334155",
+    penwidth=1.2,
+    margin="0.16,0.11"
+  ];
+
+  edge [
+    color="#64748B",
+    arrowsize=0.7,
+    penwidth=1.1
+  ];
+
+  corpus [
+    label="ARC-AGI corpus\n800 tasks\n400 training + 400 evaluation",
+    fillcolor="#E2E8F0"
+  ];
+
+  size [
+    label="All input/output grids\n≤ 8 × 8\n91 tasks",
+    fillcolor="#DBEAFE",
+    color="#60A5FA"
+  ];
+
+  colors [
+    label="Output grids\n≤ 4 non-background colors\n81 tasks",
+    fillcolor="#DBEAFE",
+    color="#60A5FA"
+  ];
+
+  pixels [
+    label="Each output color\n≤ 12 cells\n62 tasks",
+    fillcolor="#DBEAFE",
+    color="#60A5FA"
+  ];
+
+  exclusion [
+    label="Exclude e872b94a\nalready absent after size filter\n62 tasks",
+    fillcolor="#FEF3C7",
+    color="#F59E0B"
+  ];
+
+  selected [
+    label="ERA Bench ARC task set\n62 tasks\n50 training + 12 evaluation",
+    fillcolor="#D1FAE5",
+    color="#059669",
+    penwidth=1.5
+  ];
+
+  corpus -> size -> colors -> pixels -> exclusion -> selected;
+}

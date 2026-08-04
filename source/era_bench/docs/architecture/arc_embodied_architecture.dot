@@ -1,0 +1,132 @@
+digraph ArcEmbodiedArchitecture {
+  graph [
+    label="ARC Embodied — High-Level Architecture",
+    labelloc=t,
+    fontsize=22,
+    fontname="Arial",
+    rankdir=TB,
+    bgcolor="white",
+    pad=0.25,
+    nodesep=0.55,
+    ranksep=0.65,
+    splines=polyline
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Arial",
+    fontsize=12,
+    color="#334155",
+    penwidth=1.2,
+    margin="0.20,0.13"
+  ];
+
+  edge [
+    fontname="Arial",
+    fontsize=10,
+    color="#475569",
+    fontcolor="#334155",
+    arrowsize=0.8,
+    penwidth=1.15
+  ];
+
+  subgraph cluster_environment_architecture {
+    label="ARC integration — EraBenchEnvCfg";
+    color="#93C5FD";
+    fillcolor="#EFF6FF";
+    style="rounded,filled";
+    penwidth=1.5;
+
+    action [
+      label="Robot Action\nHybridArmAction",
+      fillcolor="#DBEAFE"
+    ];
+
+    task [
+      label="Task Orchestration\nLoadTaskCommand",
+      fillcolor="#DBEAFE"
+    ];
+
+    reset [
+      label="Reset Events\nTask grid and reserve stacks",
+      fillcolor="#DBEAFE"
+    ];
+
+    observations [
+      label="Observations",
+      fillcolor="#DBEAFE"
+    ];
+
+    terminations [
+      label="Terminations\nSuccess and failure",
+      fillcolor="#DBEAFE"
+    ];
+
+    recording [
+      label="Recording\nARC recorders",
+      fillcolor="#DBEAFE"
+    ];
+
+    scene [
+      label="Interactive Scene\nEraBenchSceneCfg\nrobot · cubes · cameras",
+      fillcolor="#BFDBFE",
+      penwidth=1.5
+    ];
+
+    { rank=same; action; task; reset; }
+    { rank=same; observations; terminations; recording; }
+
+    task -> reset [label="task context", weight=10];
+    reset -> action [style=invis, weight=50];
+    reset -> scene [label="configure episode"];
+    action -> scene [label="control robot"];
+    scene -> observations [label="state"];
+    scene -> terminations [label="episode state"];
+    terminations -> task [label="episode outcome"];
+    scene -> recording [label="episode data"];
+  }
+
+  subgraph cluster_runtime_loop {
+    label="Simulation control loop";
+    color="#C4B5FD";
+    fillcolor="#F5F3FF";
+    style="rounded,filled";
+    penwidth=1.5;
+
+    environment [
+      label="EraBenchEnv",
+      fillcolor="#EDE9FE"
+    ];
+
+    done [
+      label="Done?",
+      shape=diamond,
+      style=filled,
+      fillcolor="#FEF3C7",
+      margin="0.10,0.06"
+    ];
+
+    state_machine [
+      label="ArcStateMachine",
+      fillcolor="#DDD6FE"
+    ];
+
+    recovery [
+      label="Recovery Policy",
+      fillcolor="#DDD6FE"
+    ];
+
+    { rank=same; environment; done; state_machine; recovery; }
+
+    environment -> done [label="step result"];
+    done -> environment [label="yes: reset"];
+    done -> state_machine [label="no: observation"];
+    state_machine -> recovery [label="desired action"];
+    recovery -> environment [label="next action"];
+  }
+
+  observations -> environment [style=invis, weight=100, minlen=2];
+  terminations -> environment [style=invis, weight=100, minlen=2];
+  recording -> environment [style=invis, weight=100, minlen=2];
+}

@@ -1,0 +1,96 @@
+digraph ArcEmbodiedSceneSetup {
+  graph [
+    label="ARC Embodied — Scene Setup",
+    labelloc=t,
+    fontsize=21,
+    fontname="Arial",
+    rankdir=TB,
+    bgcolor="white",
+    pad=0.25,
+    nodesep=0.42,
+    ranksep=0.45,
+    splines=polyline,
+    compound=true
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Arial",
+    fontsize=10.5,
+    color="#334155",
+    penwidth=1.2,
+    margin="0.17,0.11"
+  ];
+
+  edge [
+    color="#64748B",
+    fontname="Arial",
+    fontsize=9,
+    arrowsize=0.7,
+    penwidth=1.1
+  ];
+
+  top_cam [
+    label="Top camera · origin_top_cam\n(0.20, 0.00, 2.40) m · downward\n280 × 280 RGB",
+    fillcolor="#EDE9FE",
+    color="#8B5CF6"
+  ];
+
+  subgraph cluster_table {
+    label="Table workspace · 2.00 × 2.00 m · top surface z=0";
+    fontsize=14;
+    fontname="Arial";
+    color="#94A3B8";
+    fillcolor="#F8FAFC";
+    style="rounded,filled";
+
+    input [
+      label="INPUT GRID · left\nanchor (0.00, −0.50, 0.00) m\n≤ 8 × 8 · ≤ 0.46 × 0.46 m",
+      fillcolor="#DBEAFE",
+      color="#3B82F6"
+    ];
+
+    robot [
+      label="FRANKA · middle\nbase at environment origin",
+      fillcolor="#E2E8F0",
+      penwidth=1.5
+    ];
+
+    output [
+      label="OUTPUT GRID · right\nanchor (0.00, +0.50, 0.00) m\nconstructed from reserve cubes",
+      fillcolor="#D1FAE5",
+      color="#059669"
+    ];
+
+    reserve [
+      label="RESERVE CUBES · near / bottom\n4 stacks × 12 cubes · 4 colors\npositive-local-x area",
+      fillcolor="#FEF3C7",
+      color="#F59E0B"
+    ];
+
+    { rank=same; input; robot; output; }
+    input -> robot -> output [style=invis, weight=50];
+    robot -> reserve [style=invis, weight=50];
+  }
+
+  perspective_cam [
+    label="Perspective camera · table_cam\n(1.80, 0.00, 1.70) m\n336 × 252 · RGB / depth / semantics",
+    fillcolor="#EDE9FE",
+    color="#8B5CF6"
+  ];
+
+  top_cam -> robot [
+    label="top-down view",
+    style=dashed,
+    lhead=cluster_table
+  ];
+
+  reserve -> perspective_cam [style=invis, weight=50];
+  perspective_cam -> robot [
+    label="perspective view",
+    style=dashed,
+    constraint=false,
+    lhead=cluster_table
+  ];
+}
