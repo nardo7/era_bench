@@ -1,57 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import MISSING
 
 import torch
 
+
 from isaaclab.managers.recorder_manager import RecorderTerm, RecorderTermCfg
 from isaaclab.utils import configclass
-from isaaclab.envs.mdp.recorders import InitialStateRecorderCfg, PostStepStatesRecorderCfg
 from .commands import LoadTaskCommand
 from ...common.recorders import RecorderManagerCfg
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from ..era_bench_env import EraBenchEnv
-
-
-class ARCStatesRecorderWrapper(RecorderTerm):
-    """
-    Post-step states recorder for the ARC task. It records the state
-    of the cubes that are really on the scene (on the table) and filters out
-    the ones below the table.
-
-    """
-
-    def __init__(self, cfg: "ARCStatesRecorderWrapperCfg", env):
-        super().__init__(cfg, env)
-        self._state_recorder_term: RecorderTerm = cfg.state_recorder_term_cfg.class_type(
-            cfg.state_recorder_term_cfg, env
-        )
-
-    def _filter_rigid_objects_below_table(
-        self, value: dict[str, dict[str, dict[str, torch.Tensor]]]
-    ) -> dict[str, dict[str, dict[str, torch.Tensor]]]:
-        rigid_objects = value["rigid_object"]
-        poses = rigid_objects["root_pose"]
-
-        filtered_rigid_objects = {name: obj for name, obj in rigid_objects.items() if obj["root_pose"][2] >= 0.0}
-        value["rigid_object"] = filtered_rigid_objects
-        return value
-
-    def record_post_step(self):
-        key, value = self._state_recorder_term.record_post_step()
-        # Filter out cubes that are below the table (z < 0.0)
-        if value is not None:
-            value = self._filter_rigid_objects_below_table(value)
-        return key, value
-
-    def record_post_reset(self, env_ids):
-        key, value = self._state_recorder_term.record_post_reset(env_ids)
-        if value is not None:
-            value = self._filter_rigid_objects_below_table(value)
-        return key, value
 
 
 class ARCTaskRecorderTerm(RecorderTerm):
@@ -66,9 +27,7 @@ class ARCTaskRecorderTerm(RecorderTerm):
             # Isaac Lab invokes pre-reset recording before the initial reset.  There is no
             # completed ARC episode to annotate yet, so do not create task metadata for it.
             return None, None
-        current_task_ids = (
-            [self._task_command.current_tasks[env_id] for env_id in env_ids]
-        )
+        current_task_ids = [self._task_command.current_tasks[env_id] for env_id in env_ids]
         return "task_info/task_id", torch.tensor(
             [list(task_id.encode("ascii")) for task_id in current_task_ids],
             dtype=torch.uint8,
@@ -97,9 +56,7 @@ class ARCTaskPairRecorderTerm(RecorderTerm):
         env_ids = self._resolve_env_ids(env_ids)
         if not self._has_completed_initial_reset:
             return None, None
-        current_task_pairs = (
-            [self._task_command.current_task_pair[env_id] for env_id in env_ids]
-        )
+        current_task_pairs = [self._task_command.current_task_pair[env_id] for env_id in env_ids]
         return "task_info/task_pair", torch.tensor(
             [[task_pair] for task_pair in current_task_pairs],
             dtype=torch.int64,
@@ -129,9 +86,7 @@ class CameraObservationsRecorderTerm(RecorderTerm):
         camera_obs = cast(dict[str, torch.Tensor], self._env.obs_buf["camera"])
         return "obs", {name: value.detach().cpu() for name, value in camera_obs.items()}
 
-    def record_pre_reset(
-        self, env_ids: Sequence[int] | None
-    ) -> tuple[str | None, dict[str, torch.Tensor] | None]:
+    def record_pre_reset(self, env_ids: Sequence[int] | None) -> tuple[str | None, dict[str, torch.Tensor] | None]:
         if not self._has_completed_initial_reset:
             # The initial reset has no completed episode to which a terminal
             # frame could belong.
@@ -146,9 +101,7 @@ class CameraObservationsRecorderTerm(RecorderTerm):
         # Force a render now so the final camera sample reflects the terminal
         # arm and cube state rather than the previous render interval.
         self._env.sim.render()
-        camera_obs = cast(
-            dict[str, torch.Tensor], self._env.observation_manager.compute_group("camera")
-        )
+        camera_obs = cast(dict[str, torch.Tensor], self._env.observation_manager.compute_group("camera"))
         return "obs", {name: value[env_ids].detach().cpu() for name, value in camera_obs.items()}
 
     def record_post_reset(self, env_ids: Sequence[int] | None) -> tuple[None, None]:
@@ -164,6 +117,7 @@ class ARCHighLevelActionsRecorderTerm(RecorderTerm):
     def __init__(self, cfg: "ARCHighLevelActionsRecorderTermCfg", env: EraBenchEnv):
         super().__init__(cfg, env)
         self._env = env
+        self._task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
         self._object_grasped = {i: [] for i in range(env.num_envs)}
         self._object_placed = {i: [] for i in range(env.num_envs)}
 
@@ -251,7 +205,38 @@ class ARCHighLevelActionsRecorderTerm(RecorderTerm):
             dim=1,
             index=next_end.unsqueeze(-1).expand(-1, -1, 2),
         )
-        return "high_level_actions/action_timeline", action_timeline
+        phase = action_timeline[:, :, 0]
+        has_action = phase > 0
+
+        scene_cfg = self._env.cfg.scene
+        encoded_timeline = torch.full(
+            (len(env_ids), max_T, 5), -1, dtype=action_timeline.dtype, device=self._env.device
+        )
+        encoded_timeline[:, :, 0] = phase
+        encoded_timeline[:, :, 2] = torch.where(has_action, phase - 1, -1)
+        for i, env_id in enumerate(env_ids):
+            for flat_cube_index in torch.unique(action_timeline[i, has_action[i], 1]).tolist():
+                stack_index, cube_index = divmod(flat_cube_index, scene_cfg.reserve_cubes_amount_per_stack)
+
+                color_id = scene_cfg.get_reserve_cube_arc_color(env_id, stack_index, cube_index)
+                mask = has_action[i] & (action_timeline[i, :, 1] == flat_cube_index)
+                encoded_timeline[i, mask, 1] = color_id
+                place_mask = mask & (phase[i] == 2)
+                if not place_mask.any():
+                    continue
+
+                cube_name = scene_cfg.reserve_cubes[flat_cube_index]
+                cube_obj = self._env.scene[cube_name]
+                destination = (
+                    cube_obj.data.root_pos_w[env_id, :2]
+                    - self._env.scene.env_origins[env_id, :2]
+                    - torch.tensor(scene_cfg.output_grid_center_local[:2], device=self._env.device)
+                )
+                goal = self._task_command.current_grid_pairs[env_id].to_grid_coordinates(
+                    *destination.tolist(), scene_cfg.cubes_size[0], scene_cfg.separation_distance, grid="output"
+                )
+                encoded_timeline[i, place_mask, 3:] = torch.tensor(goal, device=self._env.device)
+        return "high_level_actions/action_timeline", encoded_timeline
 
     def _resolve_env_ids(self, env_ids: Sequence[int] | None) -> list[int]:
         if env_ids is None:
@@ -268,15 +253,6 @@ class ARCHighLevelActionsRecorderTerm(RecorderTerm):
         )
         rising_edge = values & ~previous
         return rising_edge
-
-
-@configclass
-class ARCStatesRecorderWrapperCfg(RecorderTermCfg):
-    """Configuration for the ARC post-step states recorder term wrapper."""
-
-    class_type: type[RecorderTerm] = ARCStatesRecorderWrapper
-
-    state_recorder_term_cfg: RecorderTermCfg = MISSING  # pyright: ignore[reportAssignmentType]
 
 
 @configclass
@@ -315,5 +291,3 @@ class ARCTaskRecorderManagerCfg(RecorderManagerCfg):
     task_pair_recorder_term_cfg = ARCTaskPairRecorderTermCfg()
     record_pre_step_camera_observations = CameraObservationsRecorderTermCfg()
     high_level_actions_recorder_term_cfg = ARCHighLevelActionsRecorderTermCfg()
-    # record_post_step_states = ARCStatesRecorderWrapperCfg(state_recorder_term_cfg=PostStepStatesRecorderCfg())
-    # record_initial_state = ARCStatesRecorderWrapperCfg(state_recorder_term_cfg=InitialStateRecorderCfg())

@@ -267,7 +267,7 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
         self.sim.render.rendering_mode = "balanced"
-        self.sim.render_interval = 10  # 10Hz
+        self.sim.render_interval = 5  # 20Hz
         self.sim.render.antialiasing_mode = "DLAA"
         self.sim.render.enable_dl_denoiser = True
 

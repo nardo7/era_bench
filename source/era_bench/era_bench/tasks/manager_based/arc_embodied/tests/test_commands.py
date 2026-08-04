@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 import torch
+from arc_utils import GridPair
 from isaacsim import SimulationApp
 
 simulation_app = SimulationApp({"headless": True})
@@ -16,6 +17,7 @@ from era_bench.tasks.manager_based.arc_embodied.mdp.commands import (
     LoadTaskCommand,
     TaskStatus,
 )
+from era_bench.tasks.manager_based.arc_embodied.mdp.recorders import ARCHighLevelActionsRecorderTerm
 from era_bench.tasks.manager_based.common.dataset_handler import AppendHDF5DatasetFileHandler
 
 
@@ -50,6 +52,39 @@ def test_get_features_returns_unpadded_features_for_the_requested_environment() 
 
     torch.testing.assert_close(input_features, torch.tensor([[10.0, 11.0, 1.0], [20.0, 21.0, 2.0]]))
     torch.testing.assert_close(output_features, torch.tensor([[30.0, 31.0, 3.0]]))
+
+
+def test_high_level_actions_use_phase_specific_location_fields() -> None:
+    scene_cfg = SimpleNamespace(
+        reserve_cubes=["reserve_cube_00"],
+        reserve_cubes_amount_per_stack=1,
+        output_grid_center_local=(0.0, 0.5, 0.0),
+        cubes_size=(1.0, 1.0, 1.0),
+        separation_distance=1.0,
+        get_reserve_cube_arc_color=lambda *_: 2,
+    )
+    scene = type("Scene", (dict,), {})()
+    scene.env_origins = torch.zeros((1, 3))
+    scene["reserve_cube_00"] = SimpleNamespace(data=SimpleNamespace(root_pos_w=torch.tensor([[-0.5, 1.0, 0.5]])))
+    env = SimpleNamespace(
+        num_envs=1,
+        device="cpu",
+        cfg=SimpleNamespace(scene=scene_cfg),
+        scene=scene,
+    )
+    recorder = object.__new__(ARCHighLevelActionsRecorderTerm)
+    recorder._env = env
+    recorder._task_command = SimpleNamespace(current_grid_pairs=[GridPair(input=[[0]], output=[[0, 2]])])
+    recorder._object_grasped = {0: [torch.tensor([False]), torch.tensor([True]), torch.tensor([False]), torch.tensor([False])]}
+    recorder._object_placed = {0: [torch.tensor([False]), torch.tensor([False]), torch.tensor([False]), torch.tensor([True])]}
+
+    key, timeline = recorder.record_pre_reset([0])
+
+    assert key == "high_level_actions/action_timeline"
+    torch.testing.assert_close(
+        timeline,
+        torch.tensor([[[1, 2, 0, -1, -1], [1, 2, 0, -1, -1], [2, 2, 1, 0, 1], [2, 2, 1, 0, 1]]]),
+    )
 
 
 def _make_command_term(

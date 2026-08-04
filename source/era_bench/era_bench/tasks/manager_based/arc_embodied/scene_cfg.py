@@ -10,7 +10,7 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransf
 from isaaclab.sim.utils import get_current_stage
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG, FRANKA_PANDA_CFG  # isort: skip
-from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, Colors
+from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, COLOR_TO_ARC_COLOR, Colors
 from pxr import Semantics
 
 FRANKA_GRASP_CENTER_OFFSET = (0.0, 0.0, 0.1034)
@@ -346,6 +346,10 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
         if not semantics.GetSemanticDataAttr().IsValid():
             raise RuntimeError(f"Reserve cube class semantics do not exist: {cube_path}")
         return semantics
+
+    def get_reserve_cube_arc_color(self, env_id, stack_index: int, cube_index: int) -> int:
+        semantic_label = self.get_reserve_cube_semantics(env_id, stack_index, cube_index).GetSemanticDataAttr().Get()
+        return COLOR_TO_ARC_COLOR[Colors(semantic_label.removeprefix("cube_"))]
 
     def get_input_grid_cube_name(self, arc_color: int, index: int) -> str:
         """Return the pooled input-cube name for an ARC colour ID and zero-based slot."""
