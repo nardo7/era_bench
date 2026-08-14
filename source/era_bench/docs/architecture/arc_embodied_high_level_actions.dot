@@ -43,20 +43,20 @@ digraph ArcEmbodiedHighLevelActions {
   ];
 
   timeline [
-    label="action_timeline\nint64  [1, T, 4]",
+    label="action_timeline\nint64  [1, T, 5]",
     fillcolor="#BFDBFE",
     color="#3B82F6",
     penwidth=1.4
   ];
 
   fields [
-    label="[ phase, color_id, goal_row, goal_col ]",
+    label="[ phase, color_id, location_type, row, col ]",
     fillcolor="#EDE9FE",
     color="#8B5CF6"
   ];
 
   legend [
-    label="phase\n0  no action\n1  grasp\n2  place\n\ncolor_id\nARC color ID\n\ngoal_row, goal_col\nzero-based ARC output-grid cell\n\nno action: -1 for color and goal",
+    label="phase\n0  no action\n1  grasp\n2  place\n\ncolor_id\nARC color ID\n\nlocation_type\n0  reserve\n1  output grid\n\nrow, col\noutput-grid cell for place\n-1, -1 for reserve grasp\n\nno action: -1 for every field but phase",
     fillcolor="#F5F3FF",
     color="#A78BFA"
   ];

@@ -19,10 +19,10 @@ class ExtendedCuroboPlanner(CuroboPlanner):
     """
 
     _MAX_TASK_TRAJECTORY_DISTANCE = torch.linalg.vector_norm(
-        torch.tensor([0.72, -0.1, 0.24]) - torch.tensor([-0.25, 0.75, 0.15])
+        torch.tensor([0.72, -0.1, 0.32]) - torch.tensor([-0.25, 0.75, 0.16])
     )
     _SHORT_PATH_DISTANCE = 0.16
-    _MAX_ADDITIONAL_CONTACT_WINDOW = 0.1
+    _MAX_ADDITIONAL_CONTACT_WINDOW = 0.15
     _PHASE_LOG_FILENAME = "curobo_phase_debug.jsonl"
 
     def __init__(

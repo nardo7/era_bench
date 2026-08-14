@@ -390,10 +390,10 @@ class ArcStateMachine:
 
         self.offset[:, 2] = 0
         self.offset[:, -1] = 1.0  # warp expects quaternion as (x, y, z, w)
-        self.retreat_offset[:, 2] = 0.1  # retreat 0.1m above the current position
+        self.retreat_offset[:, 2] = 0.12  # retreat 0.12m above the current position
         self.retreat_offset[:, -1] = 1.0  # convert to (x, y, z, w) for warp kernel use
         self.retreat_offset_reserve[:, 2] = (
-            cube_sizes[-1] * 0.5 + cube_stacks_max_height + 0.04
+            cube_sizes[-1] * 0.5 + cube_stacks_max_height + 0.06
         )  # retreat 0.2m above the reserve cube stack
         self.retreat_offset_reserve[:, -1] = 1.0  # convert
 
