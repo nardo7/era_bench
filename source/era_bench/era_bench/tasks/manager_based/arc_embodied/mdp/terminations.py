@@ -5,7 +5,7 @@ from typing import Any, TYPE_CHECKING, cast
 
 from arc_utils import ARC_COLOR_TO_COLOR
 from era_bench.tasks.manager_based.common.geometry_utils import mirror_points_across_line
-from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg
+from era_bench.tasks.manager_based.arc_embodied.env.scene_cfg import EraBenchSceneCfg
 from isaaclab.assets import RigidObject
 from isaaclab.managers import ManagerTermBase
 from isaaclab.sensors import FrameTransformer
@@ -15,7 +15,7 @@ from .observations import objects_grasped
 from isaaclab.envs.mdp import time_out as isaaclab_time_out
 
 if TYPE_CHECKING:
-    from era_bench.tasks.manager_based.arc_embodied.era_bench_env import EraBenchEnv
+    from era_bench.tasks.manager_based.arc_embodied.env.environment import EraBenchEnv
     from isaaclab.envs import ManagerBasedRLEnv
 
 

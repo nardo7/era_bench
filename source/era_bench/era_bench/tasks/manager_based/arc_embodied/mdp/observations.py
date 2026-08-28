@@ -11,7 +11,7 @@ from isaacsim.core.prims import XFormPrim
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
-    from era_bench.tasks.manager_based.arc_embodied.era_bench_env import EraBenchEnv
+    from era_bench.tasks.manager_based.arc_embodied.env.environment import EraBenchEnv
 
 
 def ee_frame_pos(env: ManagerBasedRLEnv, ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")) -> torch.Tensor:

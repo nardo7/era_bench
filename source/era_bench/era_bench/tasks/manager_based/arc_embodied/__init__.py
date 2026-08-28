@@ -5,8 +5,6 @@
 
 import gymnasium as gym
 
-from . import agents
-
 ##
 # Register Gym environments.
 ##
@@ -14,10 +12,9 @@ from . import agents
 
 gym.register(
     id="ARC-Embodied-Era-Bench-v0",
-    entry_point=f"{__name__}.era_bench_env:EraBenchEnv",
+    entry_point=f"{__name__}.env.environment:EraBenchEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.era_bench_env_cfg:EraBenchEnvCfg",
-        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "env_cfg_entry_point": f"{__name__}.env.env_cfg:EraBenchEnvCfg",
     },
 )

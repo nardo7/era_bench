@@ -12,7 +12,7 @@ from ...common.recorders import RecorderManagerCfg
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from ..era_bench_env import EraBenchEnv
+    from ..env.environment import EraBenchEnv
 
 
 class ARCTaskRecorderTerm(RecorderTerm):

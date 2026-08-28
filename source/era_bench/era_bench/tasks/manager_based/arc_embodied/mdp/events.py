@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, cast
 from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, GridPair
 
 from era_bench.tasks.manager_based.arc_embodied.mdp.commands import LoadTaskCommand
-from era_bench.tasks.manager_based.arc_embodied.scene_cfg import GridArea
+from era_bench.tasks.manager_based.arc_embodied.env.scene_cfg import GridArea
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
@@ -20,7 +20,7 @@ from isaaclab.sim.utils import get_current_stage
 from pxr import Gf, UsdGeom
 
 if TYPE_CHECKING:
-    from ..era_bench_env import EraBenchEnv
+    from ..env.environment import EraBenchEnv
     from isaaclab.envs import ManagerBasedEnv
 
 

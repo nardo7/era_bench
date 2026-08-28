@@ -17,7 +17,7 @@ OBJECT_FEATURES = 3  # x, y, color
 COMMAND_HEADER_FEATURES = 2  # input object count, output object count
 
 if TYPE_CHECKING:
-    from ..era_bench_env import EraBenchEnv
+    from ..env.environment import EraBenchEnv
 
 
 class TaskStatus(Enum):
