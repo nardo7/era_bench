@@ -10,6 +10,10 @@ from isaacsim import SimulationApp
 
 simulation_app = SimulationApp({"headless": True})
 
+from isaaclab.sim.utils import get_current_stage
+from isaacsim.core.utils import prims as prim_utils
+from pxr import UsdGeom
+from era_bench.tasks.manager_based.arc_embodied.scene_cfg import EraBenchSceneCfg, GridArea
 from era_bench.tasks.manager_based.arc_embodied.mdp.commands import (
     COMMAND_HEADER_FEATURES,
     MAX_OBJECTS_PER_GRID,
@@ -17,7 +21,11 @@ from era_bench.tasks.manager_based.arc_embodied.mdp.commands import (
     LoadTaskCommand,
     TaskStatus,
 )
-from era_bench.tasks.manager_based.arc_embodied.mdp.recorders import ARCHighLevelActionsRecorderTerm
+from era_bench.tasks.manager_based.arc_embodied.mdp import events as arc_events
+from era_bench.tasks.manager_based.arc_embodied.mdp.recorders import (
+    ARCHighLevelActionsRecorderTerm,
+    ARCTaskTestRecorderTerm,
+)
 from era_bench.tasks.manager_based.common.dataset_handler import AppendHDF5DatasetFileHandler
 
 
@@ -52,6 +60,105 @@ def test_get_features_returns_unpadded_features_for_the_requested_environment() 
 
     torch.testing.assert_close(input_features, torch.tensor([[10.0, 11.0, 1.0], [20.0, 21.0, 2.0]]))
     torch.testing.assert_close(output_features, torch.tensor([[30.0, 31.0, 3.0]]))
+
+
+def test_current_pair_test_membership_uses_the_task_train_boundary() -> None:
+    command_term = object.__new__(LoadTaskCommand)
+    command_term._debug_vis_handle = None
+    command_term._tasks_by_id = {
+        "task-a": SimpleNamespace(train=[object(), object()], test=[object(), object()]),
+    }
+    command_term.current_tasks = ["task-a", "task-a"]
+    command_term.current_task_pair = [1, 2]
+
+    assert command_term.is_current_pair_test(0) is False
+    assert command_term.is_current_pair_test(1) is True
+
+
+def test_task_test_recorder_marks_the_completed_pair_before_reset_advances_it() -> None:
+    recorder = object.__new__(ARCTaskTestRecorderTerm)
+    recorder._env = SimpleNamespace(num_envs=2, device="cpu")
+    recorder._task_command = SimpleNamespace(is_current_pair_test=lambda env_id: env_id == 1)
+    recorder._has_completed_initial_reset = False
+
+    assert recorder.record_pre_reset([0, 1]) == (None, None)
+
+    recorder.record_post_reset([0, 1])
+    key, is_test = recorder.record_pre_reset([0, 1])
+
+    assert key == "task_info/is_test"
+    torch.testing.assert_close(is_test, torch.tensor([False, True]))
+
+
+def test_reserve_grid_background_covers_the_full_reserve_stack_footprint() -> None:
+    scene_cfg = object.__new__(EraBenchSceneCfg)
+
+    assert scene_cfg.reserve_grid_background_name == "reserve_grid_background"
+    assert scene_cfg.get_reserve_grid_background_center_local() == (0.51, 0.0, 0.00025)
+    assert scene_cfg.get_reserve_grid_background_size() == (0.48, 0.26, 0.0005)
+
+
+def test_grid_visuals_follow_raw_grid_shape_and_hide_unused_lines(monkeypatch) -> None:
+    scene_cfg = SimpleNamespace(
+        max_grid_size=8,
+        cubes_size=(0.04, 0.04, 0.04),
+        grid_cell_size=0.06,
+        grid_visual_height=0.0005,
+        get_grid_center_local=lambda area: (0.0, -0.5, 0.0),
+        get_grid_background_name=lambda area: f"{area.value}_background",
+        get_grid_row_line_name=lambda area, index: f"{area.value}_row_{index}",
+        get_grid_column_line_name=lambda area, index: f"{area.value}_column_{index}",
+    )
+    env = SimpleNamespace(cfg=SimpleNamespace(scene=scene_cfg))
+    transforms: list[tuple] = []
+    visibility: list[tuple[str, bool, int]] = []
+    monkeypatch.setattr(
+        arc_events,
+        "_set_visual_transform",
+        lambda *args: transforms.append(args[2:]),
+    )
+    monkeypatch.setattr(
+        arc_events,
+        "_set_visual_visibility",
+        lambda _env, env_id, asset_name, visible: visibility.append((asset_name, visible, env_id)),
+    )
+
+    arc_events._setup_grid_visuals(env, env_id=0, grid_area=GridArea.INPUT, grid=[[0] * 4 for _ in range(3)])
+
+    assert transforms[0] == ("input_background", (-0.02, -0.52, 0.00025), (3.0, 4.0, 1.0))
+    assert transforms[1] == ("input_row_0", (-0.11, -0.52, 0.00075), (1.0, 4.0, 1.0))
+    assert transforms[2] == ("input_column_0", (-0.02, -0.64, 0.00075), (3.0, 1.0, 1.0))
+    assert ("input_background", True, 0) in visibility
+    assert ("input_row_3", True, 0) in visibility
+    assert ("input_row_4", False, 0) in visibility
+    assert ("input_column_4", True, 0) in visibility
+    assert ("input_column_5", False, 0) in visibility
+
+
+def test_grid_visual_transform_updates_a_live_usd_prim() -> None:
+    asset_name = "grid_visual_transform_test"
+    prim_path = f"/World/envs/env_0/{asset_name}"
+    if prim_utils.is_prim_path_valid(prim_path):
+        prim_utils.delete_prim(prim_path)
+    prim_utils.create_prim(prim_path, prim_type="Xform")
+
+    arc_events._set_visual_transform(
+        SimpleNamespace(),
+        env_id=0,
+        asset_name=asset_name,
+        position=(-0.02, -0.52, 0.00025),
+        scale=(3.0, 4.0, 1.0),
+    )
+
+    prim = get_current_stage().GetPrimAtPath(prim_path)
+    assert tuple(prim.GetAttribute("xformOp:translate").Get()) == (-0.02, -0.52, 0.00025)
+    assert tuple(prim.GetAttribute("xformOp:scale").Get()) == (3.0, 4.0, 1.0)
+
+    arc_events._set_visual_visibility(SimpleNamespace(), env_id=0, asset_name=asset_name, visible=False)
+    assert UsdGeom.Imageable(prim).GetVisibilityAttr().Get() == UsdGeom.Tokens.invisible
+
+    arc_events._set_visual_visibility(SimpleNamespace(), env_id=0, asset_name=asset_name, visible=True)
+    assert UsdGeom.Imageable(prim).GetVisibilityAttr().Get() == UsdGeom.Tokens.inherited
 
 
 def test_high_level_actions_use_phase_specific_location_fields() -> None:

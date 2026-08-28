@@ -222,10 +222,9 @@ def are_objects_in_success_positions(
     environment's current ARC output; the remaining slots are ignored. For each
     ARC color, this function selects the active slots of that color, compares
     them with reserve cubes of the same color, and combines the result across
-    all colors. An output with no active targets is already complete. Otherwise,
-    the TCP must also be more than 5cm away from every target and beyond the
-    front edge of the populated output grid before the task is considered
-    complete.
+    all colors. An output with no active targets needs no cube matching. In all
+    cases, the TCP must clear the table-camera boundary through output cell
+    ``(0, 0)`` before completion.
     """
     scene_cfg: EraBenchSceneCfg = cast(EraBenchSceneCfg, env.scene.cfg)
 
@@ -275,36 +274,36 @@ def are_objects_in_success_positions(
         tcp_is_away_from_color_targets = torch.min(tcp_to_color_targets, dim=1).values > 0.05
         success_mask &= tcp_is_away_from_color_targets
 
-    # Keep the TCP on the side of the table-camera/top-left-grid line opposite
-    # the output.  The output grid grows toward +x/+y from its top-left target,
-    # while the table camera is at positive x.  A 15 cm margin covers the
-    # desired 10 cm clearance plus half of the 10.34 cm Panda gripper offset.
-    active_target_x = torch.where(
-        success_positions.active_targets,
-        success_positions.positions_w[..., 0],
-        torch.full_like(success_positions.positions_w[..., 0], torch.inf),
+    # Keep the TCP on the side of the table-camera/output-grid (0, 0) line
+    # opposite the output.  This continuous cell coordinate is independent of
+    # the colored output pixels, so the TCP must clear the grid even when its
+    # top-left cells are background.
+    load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
+    output_grid_cell_zero_local = []
+    for grid_pair in load_task_command.current_grid_pairs:
+        rows, columns = len(grid_pair.output), len(grid_pair.output[0])
+        output_grid_cell_zero_local.append(
+            (
+                scene_cfg.output_grid_center_local[0]
+                - (rows * scene_cfg.cubes_size[0] + (rows - 1) * scene_cfg.separation_distance) / 2,
+                scene_cfg.output_grid_center_local[1]
+                - (columns * scene_cfg.cubes_size[1] + (columns - 1) * scene_cfg.separation_distance) / 2,
+            )
+        )
+    output_grid_cell_zero_w = env.scene.env_origins[:, :2] + torch.tensor(
+        output_grid_cell_zero_local, device=env.device, dtype=tcp_position_w.dtype
     )
-    active_target_y = torch.where(
-        success_positions.active_targets,
-        success_positions.positions_w[..., 1],
-        torch.full_like(success_positions.positions_w[..., 1], torch.inf),
-    )
-    output_grid_top_left_w = torch.stack((active_target_x.min(dim=1).values, active_target_y.min(dim=1).values), dim=1)
     table_camera_w = env.scene.env_origins[:, :2] + torch.tensor(
         scene_cfg.table_cam.offset.pos[:2], device=env.device, dtype=tcp_position_w.dtype
     )
-    output_grid_top_left_w = torch.where(
-        success_positions.has_targets.unsqueeze(1), output_grid_top_left_w, table_camera_w
-    )
-    camera_to_grid = output_grid_top_left_w - table_camera_w
+    camera_to_grid = output_grid_cell_zero_w - table_camera_w
     grid_side_normal = torch.stack((camera_to_grid[:, 1], -camera_to_grid[:, 0]), dim=1)
-    signed_tcp_distance = torch.sum(grid_side_normal * (tcp_position_w[:, :2] - output_grid_top_left_w), dim=1)
+    signed_tcp_distance = torch.sum(grid_side_normal * (tcp_position_w[:, :2] - output_grid_cell_zero_w), dim=1)
     signed_tcp_distance /= torch.linalg.vector_norm(grid_side_normal, dim=1).clamp_min(torch.finfo(tcp_position_w.dtype).eps)
-    tcp_clear_of_table_camera = (~success_positions.has_targets) | (signed_tcp_distance <= -0.15)
+    tcp_clear_of_table_camera = signed_tcp_distance <= -0.15
     success_mask &= tcp_clear_of_table_camera
 
     if torch.any(success_mask):
-        load_task_command = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
         for env_id in success_mask.nonzero(as_tuple=False).flatten().tolist():
             load_task_command.set_task_completed(env_id)
 

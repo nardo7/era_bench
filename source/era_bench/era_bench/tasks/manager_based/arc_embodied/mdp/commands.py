@@ -266,6 +266,11 @@ class LoadTaskCommand(CommandTerm):
         task = self._tasks_by_id[self.current_tasks[env_id]]
         return [*task.train, *task.test]
 
+    def is_current_pair_test(self, env_id: int) -> bool:
+        """Return whether the active raw pair belongs to the task's held-out test set."""
+        task = self._tasks_by_id[self.current_tasks[env_id]]
+        return self.current_task_pair[env_id] >= len(task.train)
+
     def get_features(self, env_id: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Return the positions of the objects in the current task for the given environment ID."""
         input_amount = int(self.command[env_id, 0].item())

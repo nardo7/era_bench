@@ -75,6 +75,37 @@ class ARCTaskPairRecorderTerm(RecorderTerm):
         return list(env_ids)
 
 
+class ARCTaskTestRecorderTerm(RecorderTerm):
+    """Record whether the completed ARC pair belongs to its task's test set."""
+
+    def __init__(self, cfg: "ARCTaskTestRecorderTermCfg", env: EraBenchEnv):
+        super().__init__(cfg, env)
+        self._task_command: LoadTaskCommand = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
+        self._has_completed_initial_reset = False
+
+    def record_pre_reset(self, env_ids: Sequence[int] | None) -> tuple[str | None, torch.Tensor | None]:
+        env_ids = self._resolve_env_ids(env_ids)
+        if not self._has_completed_initial_reset:
+            return None, None
+        is_test = [self._task_command.is_current_pair_test(env_id) for env_id in env_ids]
+        return "task_info/is_test", torch.tensor(
+            is_test,
+            dtype=torch.bool,
+            device=self._env.device,
+        )
+
+    def record_post_reset(self, env_ids: Sequence[int] | None) -> tuple[None, None]:
+        self._has_completed_initial_reset = True
+        return None, None
+
+    def _resolve_env_ids(self, env_ids: Sequence[int] | None) -> list[int]:
+        if env_ids is None:
+            return list(range(self._env.num_envs))
+        if isinstance(env_ids, torch.Tensor):
+            return env_ids.tolist()
+        return list(env_ids)
+
+
 class CameraObservationsRecorderTerm(RecorderTerm):
     """Record camera observations under ``obs`` without retaining CUDA tensors."""
 
@@ -270,6 +301,13 @@ class ARCTaskPairRecorderTermCfg(RecorderTermCfg):
 
 
 @configclass
+class ARCTaskTestRecorderTermCfg(RecorderTermCfg):
+    """Configuration for recording held-out ARC test-pair membership."""
+
+    class_type: type[RecorderTerm] = ARCTaskTestRecorderTerm
+
+
+@configclass
 class CameraObservationsRecorderTermCfg(RecorderTermCfg):
     """Configuration for recording camera observations in CPU episode buffers."""
 
@@ -289,5 +327,6 @@ class ARCTaskRecorderManagerCfg(RecorderManagerCfg):
 
     task_recorder_term_cfg = ARCTaskRecorderTermCfg()
     task_pair_recorder_term_cfg = ARCTaskPairRecorderTermCfg()
+    task_test_recorder_term_cfg = ARCTaskTestRecorderTermCfg()
     record_pre_step_camera_observations = CameraObservationsRecorderTermCfg()
     high_level_actions_recorder_term_cfg = ARCHighLevelActionsRecorderTermCfg()

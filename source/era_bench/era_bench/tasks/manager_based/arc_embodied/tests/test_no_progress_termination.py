@@ -112,9 +112,10 @@ class _FakeFrameData:
 
 
 class _FakeCommandManager:
-    def __init__(self) -> None:
+    def __init__(self, output_grid: list[list[int]] | None = None) -> None:
         self.failed_env_ids: list[int] = []
         self.completed_env_ids: list[int] = []
+        self.current_grid_pairs = [SimpleNamespace(output=output_grid or [[1]])]
 
     def get_term(self, name: str):
         assert name == "load_task"
@@ -132,11 +133,12 @@ class _FakeSuccessEnv:
         self,
         target_position: tuple[float, float, float] = (0.0, 0.5, 0.0),
         tcp_position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        output_grid: list[list[int]] | None = None,
     ) -> None:
         self.num_envs = 1
         self.device = "cpu"
         self.scene = _FakeSuccessScene(tcp_position)
-        self.command_manager = _FakeCommandManager()
+        self.command_manager = _FakeCommandManager(output_grid)
         self.success_positions = SuccessPositionBuffer(num_envs=1, max_targets=4, device="cpu")
         self._target_position = torch.tensor(target_position, dtype=torch.float32)
         self.success_positions.replace(0, self._target_position.unsqueeze(0), torch.tensor([1]))
@@ -153,6 +155,8 @@ class _FakeSuccessScene:
     def __init__(self, tcp_position: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> None:
         self.cfg = SimpleNamespace(
             cubes_size=(0.04, 0.04, 0.04),
+            separation_distance=0.02,
+            output_grid_center_local=(0.0, 0.5, 0.0),
             table_cam=SimpleNamespace(offset=SimpleNamespace(pos=(1.8, 0.0, 1.7))),
         )
         self.env_origins = torch.zeros((1, 3), dtype=torch.float32)
@@ -234,6 +238,21 @@ def test_success_waits_until_tcp_is_clear_of_the_table_camera_grid_line() -> Non
     # This TCP has a low enough y coordinate for the removed front-edge check,
     # but remains on the output side of the table-camera boundary line.
     env.scene._frame_data.target_pos_w[0, 0, :2] = torch.tensor([1.7, 0.0])
+    success = are_objects_in_success_positions(env, distance_threshold=0.015)
+
+    assert success.tolist() == [False]
+
+
+def test_success_uses_output_cell_zero_when_it_is_background() -> None:
+    # The only output cube is at (1, 1).  Clearance must still be measured
+    # from the empty (0, 0) cell, whose camera boundary is farther from the
+    # populated target line at this TCP position.
+    env = _FakeSuccessEnv(
+        target_position=(0.01, 0.51, 0.02),
+        tcp_position=(1.17, 0.0, 0.245913),
+        output_grid=[[0, 0], [0, 1]],
+    )
+
     success = are_objects_in_success_positions(env, distance_threshold=0.015)
 
     assert success.tolist() == [False]

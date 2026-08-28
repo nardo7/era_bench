@@ -393,7 +393,7 @@ class ArcStateMachine:
         self.retreat_offset[:, 2] = cube_stacks_max_height  # retreat above the cube stack
         self.retreat_offset[:, -1] = 1.0  # convert to (x, y, z, w) for warp kernel use
         self.retreat_offset_reserve[:, 2] = (
-            cube_sizes[-1] + cube_stacks_max_height
+            cube_sizes[-1] + cube_stacks_max_height + 0.02
         )  # retreat 0.2m above the reserve cube stack
         self.retreat_offset_reserve[:, -1] = 1.0  # convert
 

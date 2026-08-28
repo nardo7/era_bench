@@ -12,10 +12,12 @@ from typing import TYPE_CHECKING, cast
 from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, GridPair
 
 from era_bench.tasks.manager_based.arc_embodied.mdp.commands import LoadTaskCommand
+from era_bench.tasks.manager_based.arc_embodied.scene_cfg import GridArea
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
-from pxr import Gf
+from isaaclab.sim.utils import get_current_stage
+from pxr import Gf, UsdGeom
 
 if TYPE_CHECKING:
     from ..era_bench_env import EraBenchEnv
@@ -202,6 +204,112 @@ def _setup_success_positions(env: EraBenchEnv, env_id: int, output_grid_cubes: t
     )
 
 
+def _set_visual_transform(
+    env: EraBenchEnv,
+    env_id: int,
+    asset_name: str,
+    position: tuple[float, float, float],
+    scale: tuple[float, float, float],
+) -> None:
+    """Set one visual-only grid prim's local USD transform for a reset environment."""
+    prim_path = f"/World/envs/env_{env_id}/{asset_name}"
+    prim = get_current_stage().GetPrimAtPath(prim_path)
+    if not prim.IsValid():
+        raise RuntimeError(f"Grid visual prim does not exist: {prim_path}")
+    xformable = UsdGeom.Xformable(prim)
+
+    translate_attr = prim.GetAttribute("xformOp:translate")
+    if not translate_attr.IsValid():
+        translate_attr = xformable.AddTranslateOp().GetAttr()
+    translate_attr.Set(Gf.Vec3d(*position))
+
+    scale_attr = prim.GetAttribute("xformOp:scale")
+    if not scale_attr.IsValid():
+        scale_attr = xformable.AddScaleOp().GetAttr()
+    scale_attr.Set(Gf.Vec3f(*scale))
+
+
+def _set_visual_visibility(env: EraBenchEnv, env_id: int, asset_name: str, visible: bool) -> None:
+    """Set one visual-only grid prim's USD visibility for a reset environment."""
+    prim_path = f"/World/envs/env_{env_id}/{asset_name}"
+    prim = get_current_stage().GetPrimAtPath(prim_path)
+    if not prim.IsValid():
+        raise RuntimeError(f"Grid visual prim does not exist: {prim_path}")
+    imageable = UsdGeom.Imageable(prim)
+    if visible:
+        imageable.MakeVisible()
+    else:
+        imageable.MakeInvisible()
+
+
+def _set_grid_visual_visibility(env: EraBenchEnv, env_id: int, grid_area: GridArea, visible: bool) -> None:
+    """Show or hide every background and line visual for one grid area."""
+    scene_cfg = env.cfg.scene
+    _set_visual_visibility(env, env_id, scene_cfg.get_grid_background_name(grid_area), visible)
+    for line_index in range(scene_cfg.max_grid_size + 1):
+        _set_visual_visibility(env, env_id, scene_cfg.get_grid_row_line_name(grid_area, line_index), visible)
+        _set_visual_visibility(env, env_id, scene_cfg.get_grid_column_line_name(grid_area, line_index), visible)
+
+
+def _setup_grid_visuals(env: EraBenchEnv, env_id: int, grid_area: GridArea, grid: list[list[int]]) -> None:
+    """Scale and position the visual background and boundary lines for one raw ARC grid."""
+    scene_cfg = env.cfg.scene
+    rows, columns = len(grid), len(grid[0])
+    if rows > scene_cfg.max_grid_size or columns > scene_cfg.max_grid_size:
+        raise ValueError(
+            f"{grid_area.value} grid shape {rows}x{columns} exceeds the supported {scene_cfg.max_grid_size}x"
+            f"{scene_cfg.max_grid_size} visual line pool."
+        )
+
+    anchor_x, anchor_y, _ = scene_cfg.get_grid_center_local(grid_area)
+    visual_center_x = anchor_x - scene_cfg.cubes_size[0] / 2
+    visual_center_y = anchor_y - scene_cfg.cubes_size[1] / 2
+    cell_size = scene_cfg.grid_cell_size
+    background_name = scene_cfg.get_grid_background_name(grid_area)
+
+    _set_visual_transform(
+        env,
+        env_id,
+        background_name,
+        (visual_center_x, visual_center_y, scene_cfg.grid_visual_height / 2),
+        (float(rows), float(columns), 1.0),
+    )
+    _set_visual_visibility(env, env_id, background_name, True)
+
+    for line_index in range(scene_cfg.max_grid_size + 1):
+        row_line_visible = line_index <= rows
+        row_line_name = scene_cfg.get_grid_row_line_name(grid_area, line_index)
+        if row_line_visible:
+            _set_visual_transform(
+                env,
+                env_id,
+                row_line_name,
+                (
+                    visual_center_x + (line_index - rows / 2) * cell_size,
+                    visual_center_y,
+                    scene_cfg.grid_visual_height * 1.5,
+                ),
+                (1.0, float(columns), 1.0),
+            )
+        _set_visual_visibility(env, env_id, row_line_name, row_line_visible)
+
+        column_line_visible = line_index <= columns
+        column_line_name = scene_cfg.get_grid_column_line_name(grid_area, line_index)
+        if column_line_visible:
+            _set_visual_transform(
+                env,
+                env_id,
+                column_line_name,
+                (
+                    visual_center_x,
+                    visual_center_y + (line_index - columns / 2) * cell_size,
+                    scene_cfg.grid_visual_height * 1.5,
+                ),
+                (float(rows), 1.0, 1.0),
+            )
+        _set_visual_visibility(env, env_id, column_line_name, column_line_visible)
+
+
 def setup_task_grid(env: EraBenchEnv, env_ids: list[int]):
     load_task_command: LoadTaskCommand = cast(LoadTaskCommand, env.command_manager.get_term("load_task"))
     env_ids_tensor = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
@@ -211,8 +319,14 @@ def setup_task_grid(env: EraBenchEnv, env_ids: list[int]):
     _reset_input_grid_cubes(env, env_ids_tensor)
     for env_id in env_ids:
         input_grid_cubes, output_grid_cubes = load_task_command.get_features(env_id)
+        grid_pair = load_task_command.current_grid_pairs[env_id]
         _setup_input_grid(env, env_id, input_grid_cubes)
         _setup_success_positions(env, env_id, output_grid_cubes)
+        _setup_grid_visuals(env, env_id, GridArea.INPUT, grid_pair.input)
+        if load_task_command.is_current_pair_test(env_id):
+            _set_grid_visual_visibility(env, env_id, GridArea.OUTPUT, visible=False)
+        else:
+            _setup_grid_visuals(env, env_id, GridArea.OUTPUT, grid_pair.output)
 
 
 def sample_success_positions(env: EraBenchEnv, env_ids: list[int] | torch.Tensor) -> None:
