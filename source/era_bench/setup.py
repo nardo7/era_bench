@@ -6,12 +6,15 @@
 """Installation script for the 'era_bench' python package."""
 
 import os
+from pathlib import Path
 import toml
 
 from setuptools import setup
 
 # Obtain the extension data from the extension.toml file
 EXTENSION_PATH = os.path.dirname(os.path.realpath(__file__))
+# `arc_utils` is checked out at the ERA Bench repository root as a Git submodule.
+ARC_UTILS_PATH = Path(EXTENSION_PATH).parents[1] / "arc_utils"
 # Read the extension.toml file
 EXTENSION_TOML_DATA = toml.load(
     os.path.join(EXTENSION_PATH, "config", "extension.toml")
@@ -19,8 +22,9 @@ EXTENSION_TOML_DATA = toml.load(
 
 # Minimum dependencies required prior to installation
 INSTALL_REQUIRES = [
-    # NOTE: Add dependencies
+    f"arc-utils @ {ARC_UTILS_PATH.resolve().as_uri()}",
     "psutil",
+    "wandb",
 ]
 
 # Installation operation

@@ -1,135 +1,198 @@
-# Template for Isaac Lab Projects
+# ERA Bench
 
-## Overview
+ERA Bench is an Isaac Lab simulation for embodied Abstract Reasoning Corpus
+(ARC-AGI-1) tasks. It turns a symbolic ARC input/output pair into a tabletop
+manipulation problem: a Franka robot observes the example grid, selects colored
+cubes from reserve stacks, and constructs the target output grid.
 
-This project/repository serves as a template for building projects or extensions based on Isaac Lab.
-It allows you to develop in an isolated environment, outside of the core Isaac Lab repository.
+The repository is primarily the simulator and dataset-generation pipeline. It
+is **not an RL training repository**. The included benchmark policy is a
+deterministic state machine backed by differential inverse kinematics and
+cuRobo motion planning. Because the environment uses Isaac Lab's manager-based
+interfaces, it can be extended with reward terms, agent configurations, and a
+training runner if reinforcement learning is desired.
 
-**Key Features:**
+## Task source and citation
 
-- `Isolation` Work outside the core Isaac Lab repository, ensuring that your development efforts remain self-contained.
-- `Flexibility` This template is set up to allow your code to be run as an extension in Omniverse.
+ERA Bench does **not** introduce new abstract-reasoning tasks. It uses the
+original ARC-AGI-1 task corpus, retaining its task IDs and input/output
+examples while expressing each output grid as a physical cube-manipulation
+episode. Cite the original ARC benchmark when using ERA Bench:
 
-**Keywords:** extension, template, isaaclab
+> François Chollet. 2019. *On the Measure of Intelligence.* arXiv:1911.01547
+> [cs.AI]. https://doi.org/10.48550/arXiv.1911.01547
 
-## Installation
-
-- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
-  We recommend using the conda or uv installation as it simplifies calling Python scripts from the terminal.
-
-- Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
-
-- Using a python interpreter that has Isaac Lab installed, install the library in editable mode using:
-
-    ```bash
-    # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-    python -m pip install -e source/era_bench
-
-- Verify that the extension is correctly installed by:
-
-    - Listing the available tasks:
-
-        Note: It the task name changes, it may be necessary to update the search pattern `"Template-"`
-        (in the `scripts/list_envs.py` file) so that it can be listed.
-
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/list_envs.py
-        ```
-
-    - Running a task:
-
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/<RL_LIBRARY>/train.py --task=<TASK_NAME>
-        ```
-
-    - Running a task with dummy agents:
-
-        These include dummy agents that output zero or random agents. They are useful to ensure that the environments are configured correctly.
-
-        - Zero-action agent
-
-            ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/zero_agent.py --task=<TASK_NAME>
-            ```
-        - Random-action agent
-
-            ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/random_agent.py --task=<TASK_NAME>
-            ```
-
-### Set up IDE (Optional)
-
-To setup the IDE, please follow these instructions:
-
-- Run VSCode Tasks, by pressing `Ctrl+Shift+P`, selecting `Tasks: Run Task` and running the `setup_python_env` in the drop down menu.
-  When running this task, you will be prompted to add the absolute path to your Isaac Sim installation.
-
-If everything executes correctly, it should create a file .python.env in the `.vscode` directory.
-The file contains the python paths to all the extensions provided by Isaac Sim and Omniverse.
-This helps in indexing all the python modules for intelligent suggestions while writing code.
-
-### Setup as Omniverse Extension (Optional)
-
-We provide an example UI extension that will load upon enabling your extension defined in `source/era_bench/era_bench/ui_extension_example.py`.
-
-To enable your extension, follow these steps:
-
-1. **Add the search path of this project/repository** to the extension manager:
-    - Navigate to the extension manager using `Window` -> `Extensions`.
-    - Click on the **Hamburger Icon**, then go to `Settings`.
-    - In the `Extension Search Paths`, enter the absolute path to the `source` directory of this project/repository.
-    - If not already present, in the `Extension Search Paths`, enter the path that leads to Isaac Lab's extension directory directory (`IsaacLab/source`)
-    - Click on the **Hamburger Icon**, then click `Refresh`.
-
-2. **Search and enable your extension**:
-    - Find your extension under the `Third Party` category.
-    - Toggle it to enable your extension.
-
-## Code formatting
-
-We have a pre-commit template to automatically format your code.
-To install pre-commit:
-
-```bash
-pip install pre-commit
-```
-
-Then you can run pre-commit with:
-
-```bash
-pre-commit run --all-files
-```
-
-## Troubleshooting
-
-### Pylance Missing Indexing of Extensions
-
-In some VsCode versions, the indexing of part of the extensions is missing.
-In this case, add the path to your extension in `.vscode/settings.json` under the key `"python.analysis.extraPaths"`.
-
-```json
-{
-    "python.analysis.extraPaths": [
-        "<path-to-ext-repo>/source/era_bench"
-    ]
+```bibtex
+@article{chollet2019measure,
+  title={On the Measure of Intelligence},
+  author={Chollet, Fran\c{c}ois},
+  journal={arXiv preprint arXiv:1911.01547},
+  year={2019},
+  doi={10.48550/arXiv.1911.01547}
 }
 ```
 
-### Pylance Crash
+See the [paper](https://arxiv.org/abs/1911.01547) and the official
+[ARC-AGI-1 benchmark page](https://arcprize.org/arc-agi/1) for the original
+task corpus.
 
-If you encounter a crash in `pylance`, it is probable that too many files are indexed and you run out of memory.
-A possible solution is to exclude some of omniverse packages that are not used in your project.
-To do so, modify `.vscode/settings.json` and comment out packages under the key `"python.analysis.extraPaths"`
-Some examples of packages that can likely be excluded are:
+## Evaluation benchmark
 
-```json
-"<path-to-isaac-sim>/extscache/omni.anim.*"         // Animation packages
-"<path-to-isaac-sim>/extscache/omni.kit.*"          // Kit UI tools
-"<path-to-isaac-sim>/extscache/omni.graph.*"        // Graph UI tools
-"<path-to-isaac-sim>/extscache/omni.services.*"     // Services tools
-...
+The companion [ERA Bench Evaluation](https://github.com/nardo7/era_bench_evaluation)
+repository contains the benchmark implementation for this dataset. Use that
+repository to evaluate models on ERA Bench data; this repository provides the
+Isaac Lab simulation and dataset-generation pipeline.
+
+## Start with the dataset
+
+The generated ERA Bench HDF5 dataset is the main artifact. Most users should
+use the released dataset directly and do not need to install Isaac Sim, Isaac
+Lab, or run this repository.
+
+Each successful episode can contain:
+
+- the ARC task ID, task-local pair index, and train/test membership;
+- robot actions, states, and structured observations;
+- RGB, depth, and colorized semantic-segmentation observations from the table
+  and wrist cameras, plus an overhead RGB view;
+- a high-level manipulation timeline encoding grasp and place operations.
+
+Dataset files are intentionally not tracked by Git. Place downloaded HDF5
+artifacts under `datasets/` when using the included inspection tools. The
+default filename used by those tools is `datasets/era_bench.hdf5`.
+
+For example, to export table-camera RGB observations as MP4 files without
+starting Isaac Sim:
+
+```bash
+python scripts/dataset/create_videos.py \
+    --dataset datasets/era_bench.hdf5
 ```
+
+The command requires Python packages for HDF5 and video handling (`h5py`,
+`imageio`, and an FFmpeg backend), but not the simulator. Use `--task` and
+`--pair` to export only one ARC task or pair, and `--data-type` to select RGB,
+depth, or semantic segmentation.
+
+## Simulation overview
+
+The registered environment is `ARC-Embodied-Era-Bench-v0`. A simulation run
+combines:
+
+- an Isaac Lab manager-based environment and ARC-specific scene;
+- a Franka Panda robot, input/output grids, reserve cube stacks, and three
+  cameras;
+- a state machine that produces high-level pick-and-place commands;
+- IK monitoring and recovery logic;
+- a hybrid action term that switches between differential IK and cuRobo;
+- task scheduling, reset events, success/failure termination, and HDF5
+  recording.
+
+The input grid is a visual reference. The robot manipulates reserve cubes to
+realize the requested output grid. Successful and failed attempts are exported
+separately, allowing interrupted generation runs to resume from existing
+successful task-pair coverage.
+
+## Setup for simulation development
+
+Only follow this section if you want to reproduce the dataset, modify the
+environment, or build a new policy on top of it.
+
+Requirements:
+
+- Linux with a supported NVIDIA GPU and driver;
+- Isaac Sim and Isaac Lab (the current development environment uses Isaac Sim
+  5.1);
+- the Isaac Lab Mimic and cuRobo dependencies;
+- Git with submodule support.
+
+Clone ERA Bench and initialize its `arc_utils` dependency:
+
+```bash
+git clone --recurse-submodules https://github.com/nardo7/era_bench.git
+cd era_bench
+git submodule update --init --recursive
+```
+
+Install the extension with the Python environment managed by Isaac Lab:
+
+```bash
+export ISAACLAB_PATH=/path/to/IsaacLab
+"$ISAACLAB_PATH/isaaclab.sh" -p -m pip install -e source/era_bench
+```
+
+Do not use an unrelated system Python for simulator commands. On a cluster,
+run the same commands inside the site's GPU-enabled Isaac Lab Apptainer image.
+
+## Quick start
+
+Run the test suite:
+
+```bash
+"$ISAACLAB_PATH/isaaclab.sh" -p -m pytest \
+    source/era_bench/test \
+    --import-mode=importlib \
+    -v
+```
+
+Run a short headless simulation and write to a new smoke-test dataset:
+
+```bash
+"$ISAACLAB_PATH/isaaclab.sh" -p \
+    scripts/benchmark/arc_state_machine_agent.py \
+    --task ARC-Embodied-Era-Bench-v0 \
+    --headless \
+    --num_envs 1 \
+    --max_steps 1000 \
+    --dataset_file datasets/smoke_test.hdf5
+```
+
+This is a simulator smoke test, not a command for reproducing the complete
+released dataset. Full generation requires substantially longer runs and
+sufficient storage for camera observations. By default, an existing dataset is
+opened in append/resume mode. Pass `--overwrite_dataset` only when you
+intentionally want to replace the selected output file.
+
+Useful runner options include:
+
+- `--num_envs`: number of parallel simulated environments;
+- `--max_steps`: maximum environment steps before exit;
+- `--store_videos`: additionally store episode videos;
+- `--debug`: print state-machine and target-pose diagnostics;
+- `--track`: enable optional Weights & Biases progress logging.
+
+## Repository layout
+
+```text
+arc_utils/                         ARC task, grid, and color utilities
+scripts/
+  benchmark/                       simulator runner and runtime logging
+  dataset/                         HDF5 inspection and video-export tools
+source/era_bench/
+  config/                          Isaac Lab extension metadata
+  docs/architecture/               detailed runtime and data-flow documentation
+  era_bench/
+    tasks/manager_based/
+      arc_embodied/
+        control/                    state machine and IK supervision
+        env/                        environment, scene, and configuration
+        mdp/                        actions, commands, events, observations,
+                                    terminations, and recorders
+      common/                       shared dataset, geometry, and recorder tools
+  test/arc_embodied/               simulation-aware unit tests
+```
+
+The architecture documents provide deeper views of the
+[overall ARC integration](source/era_bench/docs/architecture/arc_embodied_architecture.md),
+[runtime layers](source/era_bench/docs/architecture/arc_embodied_runtime_layers.md),
+and [recorded high-level actions](source/era_bench/docs/architecture/arc_embodied_high_level_actions.md).
+
+## Extending ERA Bench to reinforcement learning
+
+The environment already exposes the main Isaac Lab integration points needed
+by an RL workflow: action terms, observation groups, reset events, termination
+terms, and vectorized environments. An RL extension would still need to define
+an explicit learning objective and training stack—most importantly reward
+terms, policy observations, an agent configuration, and a training/evaluation
+entry point. Those pieces are intentionally absent from this repository's
+current simulation-and-dataset scope.

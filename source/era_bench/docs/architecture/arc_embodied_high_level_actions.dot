@@ -1,0 +1,65 @@
+digraph ArcEmbodiedHighLevelActions {
+  graph [
+    label="ARC Embodied — Stored High-Level Actions",
+    labelloc=t,
+    fontsize=21,
+    fontname="Arial",
+    rankdir=LR,
+    bgcolor="white",
+    pad=0.25,
+    nodesep=0.35,
+    ranksep=0.55,
+    splines=polyline
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Arial",
+    fontsize=11,
+    color="#334155",
+    penwidth=1.2,
+    margin="0.18,0.12"
+  ];
+
+  edge [
+    color="#64748B",
+    arrowsize=0.7,
+    penwidth=1.1
+  ];
+
+  hdf5 [
+    label="HDF5 dataset",
+    shape=cylinder,
+    style=filled,
+    fillcolor="#D1FAE5",
+    color="#059669"
+  ];
+
+  group [
+    label="/data/demo_<n>/\nhigh_level_actions/",
+    fillcolor="#DBEAFE",
+    color="#60A5FA"
+  ];
+
+  timeline [
+    label="action_timeline\nint64  [1, T, 5]",
+    fillcolor="#BFDBFE",
+    color="#3B82F6",
+    penwidth=1.4
+  ];
+
+  fields [
+    label="[ phase, color_id, location_type, row, col ]",
+    fillcolor="#EDE9FE",
+    color="#8B5CF6"
+  ];
+
+  legend [
+    label="phase\n0  no action\n1  grasp\n2  place\n\ncolor_id\nARC color ID\n\nlocation_type\n0  reserve\n1  output grid\n\nrow, col\noutput-grid cell for place\n-1, -1 for reserve grasp\n\nno action: -1 for every field but phase",
+    fillcolor="#F5F3FF",
+    color="#A78BFA"
+  ];
+
+  hdf5 -> group -> timeline -> fields -> legend;
+}

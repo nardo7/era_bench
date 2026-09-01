@@ -12,22 +12,6 @@
             "program": "${file}",
             "console": "integratedTerminal",
         },
-        {
-            "name": "Python: Train Template-Era-Bench-v0 with rl_games (PPO)",
-            "type": "debugpy",
-            "request": "launch",
-            "args" : ["--task", "Template-Era-Bench-v0", "--num_envs", "4096", "--headless"],
-            "program": "${workspaceFolder}/scripts/rl_games/train.py",
-            "console": "integratedTerminal",
-        },
-        {
-            "name": "Python: Play Template-Era-Bench-v0 with rl_games (PPO)",
-            "type": "debugpy",
-            "request": "launch",
-            "args" : ["--task", "Template-Era-Bench-v0", "--num_envs", "32"],
-            "program": "${workspaceFolder}/scripts/rl_games/play.py",
-            "console": "integratedTerminal",
-        },
         // For script execution inside a Docker
         {
             "name": "Docker: Current File",
@@ -38,28 +22,6 @@
             "env": {
                 "PYTHONPATH": "${env:PYTHONPATH}:${workspaceFolder}"
             }
-        },
-        {
-            "name": "Docker: Train Template-Era-Bench-v0 with rl_games (PPO)",
-            "type": "debugpy",
-            "request": "launch",
-            "args" : ["--task", "Template-Era-Bench-v0", "--num_envs", "4096", "--headless"],
-            "program": "${workspaceFolder}/scripts/rl_games/train.py",
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${env:PYTHONPATH}:${workspaceFolder}"
-            },
-        },
-        {
-            "name": "Docker: Play Template-Era-Bench-v0 with rl_games (PPO)",
-            "type": "debugpy",
-            "request": "launch",
-            "args" : ["--task", "Template-Era-Bench-v0", "--num_envs", "32"],
-            "program": "${workspaceFolder}/scripts/rl_games/play.py",
-            "console": "integratedTerminal",
-            "env": {
-                "PYTHONPATH": "${env:PYTHONPATH}:${workspaceFolder}"
-            },
         },
     ]
 }
