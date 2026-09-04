@@ -196,3 +196,46 @@ an explicit learning objective and training stack—most importantly reward
 terms, policy observations, an agent configuration, and a training/evaluation
 entry point. Those pieces are intentionally absent from this repository's
 current simulation-and-dataset scope.
+
+## Scaling grid sizes
+
+The current `8 × 8` limit is primarily a physical-workspace constraint: the
+robot must reach every reserve and output pose with a valid grasp/place pose.
+Larger grids are possible in principle with a longer-reach arm and coordinated
+updates to:
+
+- **Task selection:** in `arc_utils/src/arc_utils/analysis.py`, change the
+  `max_size=8` argument in `get_era_bench_tasks()`. If the expanded task set
+  needs more colors or cubes, also change the calls that currently limit output
+  grids to four colors and 12 cells per color.
+- **Grid geometry and capacity:** in
+  [`scene_cfg.py`](source/era_bench/era_bench/tasks/manager_based/arc_embodied/env/scene_cfg.py),
+  update `max_grid_size`, `cubes_size`, `separation_distance`,
+  `input_grid_center_local`, and `output_grid_center_local`. Increase
+  `input_grid_cubes_amount_per_color`, `input_grid_blue_cubes_amount`,
+  `reserve_stacks_amount`, `reserve_cubes_amount_per_stack`, and
+  `reserve_cubes_amount_per_line` as required, then reposition the reserve
+  stacks and resize the table.
+- **Runtime buffers:** in
+  [`commands.py`](source/era_bench/era_bench/tasks/manager_based/arc_embodied/mdp/commands.py),
+  increase `MAX_OBJECTS_PER_GRID` and `MAX_OUTPUT_OBJECTS_PER_GRID` to cover the
+  largest non-background input and output. `environment.py` derives its target
+  buffers from `MAX_OUTPUT_OBJECTS_PER_GRID`.
+- **Robot and planning:** replace `EraBenchSceneCfg.robot` and update
+  `FRANKA_GRASP_CENTER_OFFSET`. In
+  [`env_cfg.py`](source/era_bench/era_bench/tasks/manager_based/arc_embodied/env/env_cfg.py),
+  update the arm/gripper joint names, hand body name, default joint pose,
+  end-effector frame paths, wrist-camera parent prim, gripper commands, and
+  `curobo_task_name`. Supply a matching cuRobo robot configuration and update
+  `_MAX_TASK_TRAJECTORY_DISTANCE` in
+  [`curobo_planner_extended.py`](source/era_bench/era_bench/curobo_planner_extended.py);
+  rescale `_SHORT_PATH_DISTANCE` if the complete physical scale changes.
+- **Workspace scale:** resize/reposition the table and reserve area and update `scene.env_spacing`
+  plus `displacement_threshold`, `min_step_position_delta`, success
+  `distance_threshold`, state-machine `position_threshold`, and controller
+  `hold_position_tolerance`. If cube size changes, also rescale cube `mass`,
+  `contact_offset`, `rest_offset`, and PhysX `friction_correlation_distance`.
+
+> **Warning:** Making the cubes smaller is likely to affect AI-model performance
+> dramatically. Treat data generated at another physical scale as a separate
+> benchmark configuration.
