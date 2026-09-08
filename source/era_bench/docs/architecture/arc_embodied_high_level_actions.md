@@ -26,7 +26,12 @@ action_timeline[0, t] = [phase, color_id, location_type, row, col]
 | `row` | Zero-based output-grid row for a place; `-1` for a reserve grasp or no action |
 | `col` | Zero-based output-grid column for a place; `-1` for a reserve grasp or no action |
 
-Rows and columns use the original ARC output-grid coordinate system, with `(0, 0)` at the top-left. They are derived from the observed cube pose when placement completes, not from the planned goal order. The current simulation records reserve grasps as `[1, color_id, 0, -1, -1]` and output-grid placements as `[2, color_id, 1, row, col]`.
+Rows and columns use the original ARC output-grid coordinate system, with
+`(0, 0)` at the top-left. At pre-reset recording time, the placed cube's
+terminal pose is converted back to a grid coordinate; the coordinate is not
+taken from the planned goal order. The current simulation records reserve
+grasps as `[1, color_id, 0, -1, -1]` and output-grid placements as
+`[2, color_id, 1, row, col]`.
 
 The leading dimension is a singleton because the complete timeline is stored
 once as episode-level recorder data.

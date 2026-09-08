@@ -43,7 +43,7 @@ digraph ArcEmbodiedTaskOrchestration {
   ];
 
   load [
-    label="Environment reset loads the active pair\nprepare command → input grid / output targets / reserve stacks",
+    label="Environment reset loads the active pair\ncommand → grids / backgrounds / targets / reserve stacks",
     fillcolor="#BFDBFE",
     color="#3B82F6",
     penwidth=1.5

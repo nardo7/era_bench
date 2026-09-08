@@ -14,7 +14,7 @@ custom runtime layers and their integration boundaries are shown.
 | 2. Recovery supervision | `ArcIKWatchdog` evaluates progress and `ArcIKRecoveryPolicy` may override the desired command |
 | 3. Environment integration | `EraBenchEnv` connects the runner-side controllers to the manager-based runtime and owns ARC-wide runtime state |
 | 4. Runtime services | `LoadTaskCommand`, action terms, observations, terminations, reset events, and recorder terms are peer services orchestrated by the environment |
-| 5. Interactive scene | The instantiated scene exposes Franka, cubes, cameras, and end-effector sensing |
+| 5. Interactive scene | The instantiated scene exposes Franka, cubes, task-shaped grid/reserve backgrounds, cameras, and end-effector sensing |
 | 6. Simulation runtime | Isaac Sim owns the USD stage, physics, rendering, and sensor execution |
 
 Actions, events, observations, terminations, and recorders are intentionally
@@ -44,30 +44,29 @@ The configured runtime has three distinct simulation-time intervals:
 |---|---|---:|---:|
 | Physics | `sim.dt = 0.01` | `0.01 s` | `100 Hz` |
 | Environment/control | `decimation = 5` | `5 × 0.01 = 0.05 s` | `20 Hz` |
-| Rendering | `sim.render_interval = 10` physics steps | `10 × 0.01 = 0.10 s` | `10 Hz` |
+| Rendering | `sim.render_interval = 5` physics steps | `5 × 0.01 = 0.05 s` | `20 Hz` |
 
 ```text
 simulation time:  0.00             0.05             0.10 s
 physics:          P  P  P  P  P    P  P  P  P  P
-control/env step: C                 C
-render:           R                                   R
+control/env step: C                 C                 C
+render:           R                 R                 R
 ```
 
 One runner/state-machine command is processed per environment step. The action
 manager then applies that command during five physics substeps before
 terminations, resets, commands, and observations are evaluated again.
 
-Camera observations are recorded at the environment-step cadence (`20 Hz`),
-while RTX image content is normally refreshed at the rendering cadence
-(`10 Hz`). Consecutive recorded camera entries may therefore contain the same
-rendered image. A terminating reset can add an extra render because
-`rerender_on_reset=True`.
+Camera observations and regular RTX rendering share the environment-step
+cadence (`20 Hz`). `CameraObservationsRecorderTerm` records one pre-step sample
+per control step and forces a fresh terminal render before reset, so the final
+camera observation reflects the terminal arm and cube state.
 
 The maximum episode duration is `320 s`, corresponding to:
 
 - `6,400` environment/control steps;
 - `32,000` physics steps; and
-- `3,200` regular render intervals, excluding additional reset renders.
+- `6,400` regular render intervals, plus the forced terminal render.
 
 ### Physics and rendering configuration
 

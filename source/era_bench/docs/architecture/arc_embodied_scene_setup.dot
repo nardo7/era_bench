@@ -4,93 +4,118 @@ digraph ArcEmbodiedSceneSetup {
     labelloc=t,
     fontsize=21,
     fontname="Arial",
-    rankdir=TB,
-    bgcolor="white",
-    pad=0.25,
-    nodesep=0.42,
-    ranksep=0.45,
+    layout=neato,
+    overlap=true,
     splines=polyline,
-    compound=true
+    outputorder=nodesfirst,
+    bgcolor="white",
+    pad=0.30
   ];
 
   node [
     shape=box,
     style="rounded,filled",
     fontname="Arial",
-    fontsize=10.5,
+    fontsize=12,
     color="#334155",
     penwidth=1.2,
-    margin="0.17,0.11"
+    margin="0.17,0.11",
+    pin=true
   ];
 
   edge [
     color="#64748B",
     fontname="Arial",
-    fontsize=9,
+    fontsize=10.5,
     arrowsize=0.7,
     penwidth=1.1
   ];
 
-  top_cam [
-    label="Top camera · origin_top_cam\n(0.20, 0.00, 2.40) m · downward\n280 × 280 RGB",
-    fillcolor="#EDE9FE",
-    color="#8B5CF6"
+  table_surface [
+    label="",
+    shape=box,
+    style="rounded,filled",
+    fixedsize=true,
+    width=6.5,
+    height=6.5,
+    fillcolor="#F8FAFC",
+    color="#94A3B8",
+    penwidth=1.5,
+    pos="0,0!"
   ];
 
-  subgraph cluster_table {
-    label="Table workspace · 2.00 × 2.00 m · top surface z=0";
-    fontsize=14;
-    fontname="Arial";
-    color="#94A3B8";
-    fillcolor="#F8FAFC";
-    style="rounded,filled";
+  table_label [
+    label="TABLE WORKSPACE\n2.00 × 2.00 m · top surface z=0",
+    shape=plain,
+    style="",
+    margin=0,
+    fontname="Arial",
+    fontsize=15,
+    fontcolor="#334155",
+    pos="-1.90,2.70!"
+  ];
 
-    input [
-      label="INPUT GRID · left\nanchor (0.00, −0.50, 0.00) m\n≤ 8 × 8 · ≤ 0.46 × 0.46 m",
-      fillcolor="#DBEAFE",
-      color="#3B82F6"
-    ];
+  input [
+    label="INPUT GRID\nleft\n(0.00, −0.50, 0.00) m\n≤ 8 × 8\nblack background\nwhite lines",
+    fillcolor="#DBEAFE",
+    color="#3B82F6",
+    fixedsize=true,
+    width=1.95,
+    height=1.85,
+    pos="-2.15,0.95!"
+  ];
 
-    robot [
-      label="FRANKA · middle\nbase at environment origin",
-      fillcolor="#E2E8F0",
-      penwidth=1.5
-    ];
+  robot [
+    label="FRANKA\nmiddle\nbase at\nenvironment origin",
+    fillcolor="#E2E8F0",
+    penwidth=1.5,
+    fixedsize=true,
+    width=1.70,
+    height=1.85,
+    pos="0,0.95!"
+  ];
 
-    output [
-      label="OUTPUT GRID · right\nanchor (0.00, +0.50, 0.00) m\nconstructed from reserve cubes",
-      fillcolor="#D1FAE5",
-      color="#059669"
-    ];
+  output [
+    label="OUTPUT GRID\nright\n(0.00, +0.50, 0.00) m\nconstructed\nbackground hidden\nfor ARC test pairs",
+    fillcolor="#D1FAE5",
+    color="#059669",
+    fixedsize=true,
+    width=1.95,
+    height=1.85,
+    pos="2.15,0.95!"
+  ];
 
-    reserve [
-      label="RESERVE CUBES · near / bottom\n4 stacks × 12 cubes · 4 colors\npositive-local-x area",
-      fillcolor="#FEF3C7",
-      color="#F59E0B"
-    ];
+  reserve [
+    label="RESERVE CUBES\nnear / bottom\n4 stacks × 12 cubes\n4 shuffled colors\nviolet background\npositive-local-x area",
+    fillcolor="#FEF3C7",
+    color="#F59E0B",
+    fixedsize=true,
+    width=2.10,
+    height=2.10,
+    pos="0,-1.80!"
+  ];
 
-    { rank=same; input; robot; output; }
-    input -> robot -> output [style=invis, weight=50];
-    robot -> reserve [style=invis, weight=50];
-  }
+  top_cam [
+    label="TOP CAMERA\norigin_top_cam\n(0.20, 0.00, 2.40) m\ndownward\n280 × 280 RGB",
+    fillcolor="#EDE9FE",
+    color="#8B5CF6",
+    fixedsize=true,
+    width=2.30,
+    height=1.55,
+    pos="0,4.75!"
+  ];
 
   perspective_cam [
-    label="Perspective camera · table_cam\n(1.80, 0.00, 1.70) m\n336 × 252 · RGB / depth / semantics",
+    label="PERSPECTIVE CAMERA\ntable_cam\n(1.43, 0.00, 1.60) m\n336 × 252\nRGB / depth / semantics",
     fillcolor="#EDE9FE",
-    color="#8B5CF6"
+    color="#8B5CF6",
+    fixedsize=true,
+    width=2.45,
+    height=1.55,
+    pos="3.60,-5.00!"
   ];
 
-  top_cam -> robot [
-    label="top-down view",
-    style=dashed,
-    lhead=cluster_table
-  ];
+  top_cam -> robot [style=dashed];
 
-  reserve -> perspective_cam [style=invis, weight=50];
-  perspective_cam -> robot [
-    label="perspective view",
-    style=dashed,
-    constraint=false,
-    lhead=cluster_table
-  ];
+  perspective_cam -> robot [style=dashed];
 }

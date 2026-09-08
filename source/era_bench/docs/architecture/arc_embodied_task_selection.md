@@ -57,6 +57,14 @@ result after sorting it by the maximum number of non-background output cells.
 A run may narrow the set further through `LoadTaskCommandCfg.tasks_ids`, but
 that does not change the 62-task benchmark definition above.
 
+## Recorded-artifact cross-check
+
+The task IDs in the released dataset match this 62-task selection exactly. The
+artifact contains 62 task-view groups and 62 rule groups; the rule
+metadata identifies the same 50 training and 12 evaluation tasks. This checks
+benchmark membership, not complete pair coverage; scheduling and retry behavior
+remain defined by the current simulator source rather than by one recorded run.
+
 ## Diagram
 
 ![ARC Embodied benchmark task selection](arc_embodied_task_selection.svg)

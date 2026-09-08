@@ -91,7 +91,7 @@ digraph ArcEmbodiedRuntimeLayers {
     style="rounded,filled";
 
     scene [
-      label="Franka  ·  reserve cubes  ·  input grid  ·  cameras  ·  end-effector frame",
+      label="Franka  ·  cubes  ·  grid/reserve backgrounds  ·  cameras  ·  end-effector frame",
       fillcolor="#FEF3C7"
     ];
   }

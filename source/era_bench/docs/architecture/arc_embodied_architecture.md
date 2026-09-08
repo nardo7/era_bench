@@ -18,13 +18,13 @@ ARC-specific additions and where they integrate with it.
 | ARC addition | Responsibility | Isaac Lab integration |
 |---|---|---|
 | `EraBenchEnvCfg` | Composes the complete ARC task configuration | Supplies the custom scene and manager terms to the existing manager-based environment |
-| `EraBenchEnv` | Holds ARC runtime target/reserve buffers and restores recorded progress | Extends the existing mimic-capable manager-based environment |
+| `EraBenchEnv` | Holds ARC runtime target/reserve buffers and initializes command-side resume state from recorded progress | Extends the existing mimic-capable manager-based environment |
 | `LoadTaskCommand` | Owns task assignment, pair progression, retries, and resume state | Installed as the ARC command term |
-| ARC reset events | Prepare the active command and configure the task grid and reserve stacks | Installed as reset-mode event terms |
-| `EraBenchSceneCfg` | Defines the Franka workspace, pooled cubes, cameras, colors, and semantics | Supplies the interactive scene configuration |
-| `HybridArmAction` | Selects DiffIK or cuRobo execution for each environment | Installed as the custom arm action term |
+| ARC reset events | Prepare the active command; configure task grids, visual grid backgrounds, and reserve stacks; and hide the output background for ARC test pairs | Installed as reset-mode event terms |
+| `EraBenchSceneCfg` | Defines the Franka workspace, pooled cubes, visual backgrounds and lines, cameras, colors, and semantics | Supplies the interactive scene configuration |
+| `HybridArmAction` and `TernaryJointPositionAction` | Select DiffIK or cuRobo arm execution per environment and expose open/release/close gripper commands | Installed as the custom action terms |
 | ARC observations and terminations | Derive ARC feedback and classify successful or failed episodes | Installed as observation and termination terms |
-| ARC recorder terms | Capture task metadata, high-level actions, cameras, and video | Installed in the recorder manager configuration |
+| ARC recorder terms | Capture task/pair/split metadata, high-level actions, camera observations, and optional video | Installed in the recorder manager configuration |
 | `ArcStateMachine` and recovery policy | Generate and correct the high-level manipulation action | Remain runner-side and communicate with the environment through observations and actions |
 
 ### Main runtime flows
@@ -34,12 +34,15 @@ ARC-specific additions and where they integrate with it.
    coverage from the configured dataset.
 2. **Reset:** `prepare_task_command()` advances or retries the task pair before
    later reset events read it. The events populate the input reference grid,
-   output target buffer, reserve stack poses, colors, and semantic labels.
+   output target buffer, task-shaped grid backgrounds, reserve stack poses,
+   colors, and semantic labels. The output-grid background is hidden for ARC
+   test pairs.
 3. **Control step:** The runner reads the end-effector pose and asks
    `ArcStateMachine.compute()` for the next pose and gripper command. It adds
    controller/plan/attachment metadata and calls `EraBenchEnv.step()`.
 4. **Robot execution:** `HybridArmAction` either applies DiffIK targets or
-   replays a per-environment cuRobo joint plan.
+   replays a per-environment cuRobo joint plan, while the ternary gripper term
+   maps the state-machine command to open, release, or close positions.
 5. **Feedback and episode transition:** After physics, observation and
    termination terms inspect scene state. Terminations update command status.
    Recorders finalize the episode before reset; reset events and command
@@ -51,13 +54,19 @@ ARC-specific additions and where they integrate with it.
   logging only observes its public state.
 - Scene assets and path/semantic lookup stay in `EraBenchSceneCfg`; reset events
   perform task-dependent scene writes.
+- Black grid backgrounds, white boundaries, and the violet reserve background
+  are visual-only scene assets. Reset events resize the grid backgrounds and
+  suppress the output background for ARC test pairs so output dimensions are
+  not exposed.
 - `ArcStateMachine` is controller-neutral. `HybridArmAction` owns DiffIK/cuRobo
   execution and only exposes a generic transition permission to the state
   machine.
-- Reserve cube identity is physical and stable; color is reset-time state held
-  in environment-major buffers.
+- Reserve cube identity is physical and stable. Each reset derives a task-local
+  four-color palette, shuffles its physical stack assignment, and stores the
+  resulting colors and poses in environment-major buffers.
 - Recorders do not own control behavior. Camera observations move to CPU before
-  episode buffering while retaining their `obs/...` dataset structure.
+  episode buffering while retaining their `obs/...` dataset structure. A
+  forced terminal render contributes the final camera sample before reset.
 
 ## Simple architecture diagram
 

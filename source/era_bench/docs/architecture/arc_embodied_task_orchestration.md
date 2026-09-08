@@ -48,8 +48,10 @@ Inside a terminating `env.step()`:
 3. `_reset_idx()` applies reset events.
 4. The first reset event, `prepare_task_command`, chooses the retry, next pair,
    or next task and refreshes the command tensor.
-5. Later reset events rebuild the input grid, output targets, reserve-stack
-   poses, and reserve colors from that refreshed command.
+5. Later reset events rebuild the input grid, output targets, task-shaped grid
+   backgrounds, reserve-stack poses, and reserve colors from that refreshed
+   command. The output background is hidden when the active pair is an ARC test
+   pair.
 6. `CommandManager.reset()` runs afterward. A preparation flag prevents it from
    advancing the task a second time.
 7. The runner receives the done signal and resets its state machine, watchdog,
@@ -85,7 +87,7 @@ pair or task is assigned and therefore acts as the active pair's retry counter.
 | Episode timeout | Failure | `320 s` = `6,400` environment steps |
 | Ungrasped reserve cube displaced | Failure | More than `0.04 m` from its reset position |
 | No end-effector progress | Failure | `25` stagnant control steps after `10` warm-up steps; minimum movement `0.0005 m` |
-| All output targets satisfied | Success | Matching-color cube distance at most `0.015 m`, plus end-effector clearance |
+| All output targets satisfied | Success | Matching-color cube distance at most `0.015 m`, enough cubes of each color, TCP more than `0.05 m` from the color targets, and TCP at least `0.15 m` onto the non-output side of the line from `table_cam` through output cell `(0, 0)` |
 | Gap in ordered output targets | Failure | Any reached–missing–reached pattern |
 
 ### Outcome-order caveat
