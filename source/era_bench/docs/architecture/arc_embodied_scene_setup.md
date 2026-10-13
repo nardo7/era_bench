@@ -31,8 +31,8 @@ These are final RGB camera samples from a current recorded task:
 
 - ARC task: `3b4c2228`
 - Raw task-pair index: `3`
-- Recorded action/state samples: `300`
-- Shown camera index: `300`, the forced terminal sample after the last control
+- Recorded action/state samples: `316`
+- Shown camera index: `316`, the forced terminal sample after the last control
   step
 
 The pair has a `5 × 7` input grid and a `3 × 3` output grid. Its completed
@@ -40,8 +40,8 @@ output consists of two blue cubes, both visible to the right of the robot.
 
 | Perspective camera — `table_cam` | Top-down camera — `origin_top_cam` |
 |---|---|
-| ![Final perspective frame from demo 52](assets/demo_52_final_table_cam.png) | ![Final top-down frame from demo 52](assets/demo_52_final_origin_top_cam.png) |
-| `336 × 252` RGB | `280 × 280` RGB |
+| ![Final perspective frame for task 3b4c2228 pair 3](assets/demo_52_final_table_cam.png) | ![Final top-down frame for task 3b4c2228 pair 3](assets/demo_52_final_origin_top_cam.png) |
+| `352 × 256` RGB | `352 × 256` RGB |
 
 ## Assigned physical areas
 
@@ -90,8 +90,8 @@ reserve background, and grid lines.
 
 | Camera | Pose | Resolution | Recorded data |
 |---|---|---:|---|
-| `table_cam` | Fixed perspective camera at `(1.43, 0.00, 1.60) m` | `336 × 252` | RGB, image-plane depth, colorized semantic segmentation |
-| `origin_top_cam` | Fixed downward camera at `(0.20, 0.00, 2.40) m` | `280 × 280` | RGB |
+| `table_cam` | Fixed perspective camera at `(1.43, 0.00, 1.60) m` | `352 × 256` | RGB, image-plane depth, colorized semantic segmentation |
+| `origin_top_cam` | Fixed downward camera at `(0.25, 0.00, 1.90) m` | `352 × 256` | RGB |
 | `wrist_cam` | Attached to the Panda hand at local offset `(0.13, 0.00, -0.15) m` | `112 × 112` | RGB, image-plane depth, colorized semantic segmentation |
 
 Fixed-camera poses are local to each environment origin; the wrist pose is
@@ -99,6 +99,18 @@ relative to `panda_hand`. All cameras use `update_period=0.0` and therefore
 update when the simulation renders. The scene overview uses the two fixed
 cameras. The wrist camera is an auxiliary robot-centric sensor and is not part
 of the paired overview above.
+
+The `table_cam` uses a frame whose dimensions are both
+multiples of 32. Its width and horizontal aperture were increased together from
+`336 px` and `18.43 mm` to `352 px` and `19.31 mm`. This widens the horizontal
+framing while keeping the effective focal length effectively constant at about
+`455.7 px`, so projected cube detail is preserved.
+
+The `origin_top_cam` uses a patch-aligned wide frame: both dimensions are
+multiples of 32, and the vertical crop reallocates pixels to horizontal grid
+detail. Its framing prioritizes complete input and output grids; the gripper may
+be partially outside this overview in extreme poses. Fine manipulation remains
+available through `table_cam` and `wrist_cam`.
 
 ## Layout diagram
 

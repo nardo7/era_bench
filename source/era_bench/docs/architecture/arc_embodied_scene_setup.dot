@@ -96,7 +96,7 @@ digraph ArcEmbodiedSceneSetup {
   ];
 
   top_cam [
-    label="TOP CAMERA\norigin_top_cam\n(0.20, 0.00, 2.40) m\ndownward\n280 × 280 RGB",
+    label="TOP CAMERA\norigin_top_cam\n(0.25, 0.00, 1.90) m\ndownward\n352 × 256 RGB",
     fillcolor="#EDE9FE",
     color="#8B5CF6",
     fixedsize=true,
@@ -106,7 +106,7 @@ digraph ArcEmbodiedSceneSetup {
   ];
 
   perspective_cam [
-    label="PERSPECTIVE CAMERA\ntable_cam\n(1.43, 0.00, 1.60) m\n336 × 252\nRGB / depth / semantics",
+    label="PERSPECTIVE CAMERA\ntable_cam\n(1.43, 0.00, 1.60) m\n352 × 256\nRGB / depth / semantics",
     fillcolor="#EDE9FE",
     color="#8B5CF6",
     fixedsize=true,

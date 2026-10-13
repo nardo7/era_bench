@@ -124,7 +124,7 @@ def _write_video(frames: np.ndarray, output_path: Path, fps: int) -> None:
             fps=fps,
             codec="libx264",
             quality=8,
-            macro_block_size=28,
+            macro_block_size=32,
         )
         try:
             for frame in frames:

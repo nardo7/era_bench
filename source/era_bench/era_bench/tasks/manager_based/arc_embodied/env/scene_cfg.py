@@ -79,19 +79,16 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     table_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/table_cam",
         update_period=0.0,
-        height=252,
-        width=336,
+        height=256,
+        width=352,
         data_types=["rgb", "distance_to_image_plane", "semantic_segmentation"],
         depth_clipping_behavior="max",
         semantic_filter=["class"],
         colorize_semantic_segmentation=True,
         semantic_segmentation_mapping=SEMANTIC_SEGMENTATION_MAPPING,
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=25.0, focus_distance=2.3, horizontal_aperture=18.43, clipping_range=(0.1, 5.0)
+            focal_length=25.0, focus_distance=2.3, horizontal_aperture=19.31, clipping_range=(0.1, 5.0)
         ),
-        # offset=TiledCameraCfg.OffsetCfg(
-        #     pos=(1.8, 0.0, 0.7), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"
-        # ),
         offset=TiledCameraCfg.OffsetCfg(
             pos=(1.43, 0.0, 1.6), rot=(0.23021145, -0.66858260, -0.66858260, 0.23021145), convention="ros"
         ),
@@ -100,13 +97,19 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     origin_top_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/origin_top_cam",
         update_period=0.0,
-        height=280,
-        width=280,
+        # Favor horizontal detail while keeping both dimensions aligned to 32-pixel model patches.
+        height=256,
+        width=352,
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=25.294922600, focus_distance=2.4, horizontal_aperture=20.955, clipping_range=(0.1, 5.0)
+            focal_length=25.294922600, focus_distance=1.9, horizontal_aperture=20.955, clipping_range=(0.1, 5.0)
         ),
-        offset=TiledCameraCfg.OffsetCfg(pos=(0.2, 0.0, 2.4), rot=(0.0, 0.70711, 0.70711, 0.0), convention="ros"),
+        offset=TiledCameraCfg.OffsetCfg(
+            # Prioritize complete grids; extreme gripper poses may leave the cropped vertical field of view.
+            pos=(0.25, 0.0, 1.9),
+            rot=(0.0, 0.70711, 0.70711, 0.0),
+            convention="ros",
+        ),
     )
 
     # end-effector sensor: will be populated by agent env cfg
