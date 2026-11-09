@@ -9,7 +9,7 @@
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 866.6)">
 <title>ArcEmbodiedSceneSetup</title>
 <polygon fill="white" stroke="transparent" points="-21.6,21.6 -21.6,-866.6 611.1,-866.6 611.1,21.6 -21.6,21.6"/>
-<text text-anchor="middle" x="294.75" y="-824.2" font-family="Arial" font-size="21.00">ARC Embodied — Scene Setup</text>
+<text text-anchor="middle" x="294.75" y="-824.2" font-family="Arial" font-size="21.00">ERA&#45;Bench Sim — Scene Setup</text>
 <!-- table_surface -->
 <g id="node1" class="node">
 <title>table_surface</title>
@@ -29,8 +29,8 @@
 <text text-anchor="middle" x="87.5" y="-500.8" font-family="Arial" font-size="12.00">left</text>
 <text text-anchor="middle" x="87.5" y="-487.8" font-family="Arial" font-size="12.00">(0.00, −0.50, 0.00) m</text>
 <text text-anchor="middle" x="87.5" y="-474.8" font-family="Arial" font-size="12.00">≤ 8 × 8</text>
-<text text-anchor="middle" x="87.5" y="-461.8" font-family="Arial" font-size="12.00">black background</text>
-<text text-anchor="middle" x="87.5" y="-448.8" font-family="Arial" font-size="12.00">white lines</text>
+<text text-anchor="middle" x="87.5" y="-461.8" font-family="Arial" font-size="12.00">dark background</text>
+<text text-anchor="middle" x="87.5" y="-448.8" font-family="Arial" font-size="12.00">gray lines</text>
 </g>
 <!-- robot -->
 <g id="node4" class="node">
@@ -80,7 +80,7 @@
 <text text-anchor="middle" x="501.5" y="-78.9" font-family="Arial" font-size="12.00">PERSPECTIVE CAMERA</text>
 <text text-anchor="middle" x="501.5" y="-65.9" font-family="Arial" font-size="12.00">table_cam</text>
 <text text-anchor="middle" x="501.5" y="-52.9" font-family="Arial" font-size="12.00">(1.43, 0.00, 1.60) m</text>
-<text text-anchor="middle" x="501.5" y="-39.9" font-family="Arial" font-size="12.00">352 × 256</text>
+<text text-anchor="middle" x="501.5" y="-39.9" font-family="Arial" font-size="12.00">336 × 252</text>
 <text text-anchor="middle" x="501.5" y="-26.9" font-family="Arial" font-size="12.00">RGB / depth / semantics</text>
 </g>
 <!-- top_cam&#45;&gt;robot -->

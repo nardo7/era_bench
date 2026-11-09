@@ -9,7 +9,7 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING, cast
 
-from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, GridPair
+from arc_utils import ARC_COLOR_TO_COLOR, GridPair
 
 from era_bench.tasks.manager_based.arc_embodied.mdp.commands import LoadTaskCommand
 from era_bench.tasks.manager_based.arc_embodied.env.scene_cfg import GridArea
@@ -83,7 +83,8 @@ def _set_reserve_cube_color(
 ) -> None:
     """Set a reserve cube's rendered color and color-aware semantic class."""
     shader = env.cfg.scene.get_reserve_cube_shader(env_id, stack_index, cube_index)
-    shader.GetAttribute("inputs:diffuseColor").Set(Gf.Vec3f(*COLOR_RGB[ARC_COLOR_TO_COLOR[arc_color_id]]))
+    visual_color = env.cfg.scene.get_cube_visual_color(ARC_COLOR_TO_COLOR[arc_color_id])
+    shader.GetAttribute("inputs:diffuseColor").Set(Gf.Vec3f(*visual_color))
     semantics = env.cfg.scene.get_reserve_cube_semantics(env_id, stack_index, cube_index)
     semantics.GetSemanticDataAttr().Set(env.cfg.scene.get_cube_semantic_label(arc_color_id))
 
@@ -235,20 +236,36 @@ def _set_visual_visibility(env: EraBenchEnv, env_id: int, asset_name: str, visib
     prim = get_current_stage().GetPrimAtPath(prim_path)
     if not prim.IsValid():
         raise RuntimeError(f"Grid visual prim does not exist: {prim_path}")
-    imageable = UsdGeom.Imageable(prim)
-    if visible:
-        imageable.MakeVisible()
-    else:
-        imageable.MakeInvisible()
+    visibility = UsdGeom.Imageable(prim).GetVisibilityAttr()
+    token = UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible
+    if not visibility.Set(token):
+        raise RuntimeError(f"Failed to set grid visual visibility: {prim_path}")
 
 
-def _set_grid_visual_visibility(env: EraBenchEnv, env_id: int, grid_area: GridArea, visible: bool) -> None:
-    """Show or hide every background and line visual for one grid area."""
+def _collapse_visual(env: EraBenchEnv, env_id: int, asset_name: str) -> None:
+    """Give one unused grid visual zero geometry in a reset environment."""
+    prim_path = f"/World/envs/env_{env_id}/{asset_name}"
+    prim = get_current_stage().GetPrimAtPath(prim_path)
+    if not prim.IsValid():
+        raise RuntimeError(f"Grid visual prim does not exist: {prim_path}")
+    xformable = UsdGeom.Xformable(prim)
+    scale_attr = prim.GetAttribute("xformOp:scale")
+    if not scale_attr.IsValid():
+        scale_attr = xformable.AddScaleOp().GetAttr()
+    if not scale_attr.Set(Gf.Vec3f(0.0, 0.0, 0.0)):
+        raise RuntimeError(f"Failed to collapse grid visual: {prim_path}")
+
+
+def _hide_grid_visuals(env: EraBenchEnv, env_id: int, grid_area: GridArea) -> None:
+    """Collapse and hide every background and line visual for one grid area."""
     scene_cfg = env.cfg.scene
-    _set_visual_visibility(env, env_id, scene_cfg.get_grid_background_name(grid_area), visible)
+    asset_names = [scene_cfg.get_grid_background_name(grid_area)]
     for line_index in range(scene_cfg.max_grid_size + 1):
-        _set_visual_visibility(env, env_id, scene_cfg.get_grid_row_line_name(grid_area, line_index), visible)
-        _set_visual_visibility(env, env_id, scene_cfg.get_grid_column_line_name(grid_area, line_index), visible)
+        asset_names.append(scene_cfg.get_grid_row_line_name(grid_area, line_index))
+        asset_names.append(scene_cfg.get_grid_column_line_name(grid_area, line_index))
+    for asset_name in asset_names:
+        _collapse_visual(env, env_id, asset_name)
+        _set_visual_visibility(env, env_id, asset_name, False)
 
 
 def _setup_grid_visuals(env: EraBenchEnv, env_id: int, grid_area: GridArea, grid: list[list[int]]) -> None:
@@ -279,34 +296,32 @@ def _setup_grid_visuals(env: EraBenchEnv, env_id: int, grid_area: GridArea, grid
     for line_index in range(scene_cfg.max_grid_size + 1):
         row_line_visible = line_index <= rows
         row_line_name = scene_cfg.get_grid_row_line_name(grid_area, line_index)
-        if row_line_visible:
-            _set_visual_transform(
-                env,
-                env_id,
-                row_line_name,
-                (
-                    visual_center_x + (line_index - rows / 2) * cell_size,
-                    visual_center_y,
-                    scene_cfg.grid_visual_height * 1.5,
-                ),
-                (1.0, float(columns), 1.0),
-            )
+        _set_visual_transform(
+            env,
+            env_id,
+            row_line_name,
+            (
+                visual_center_x + (line_index - rows / 2) * cell_size,
+                visual_center_y,
+                scene_cfg.grid_visual_height * 1.5,
+            ),
+            (1.0, float(columns), 1.0) if row_line_visible else (0.0, 0.0, 0.0),
+        )
         _set_visual_visibility(env, env_id, row_line_name, row_line_visible)
 
         column_line_visible = line_index <= columns
         column_line_name = scene_cfg.get_grid_column_line_name(grid_area, line_index)
-        if column_line_visible:
-            _set_visual_transform(
-                env,
-                env_id,
-                column_line_name,
-                (
-                    visual_center_x,
-                    visual_center_y + (line_index - columns / 2) * cell_size,
-                    scene_cfg.grid_visual_height * 1.5,
-                ),
-                (float(rows), 1.0, 1.0),
-            )
+        _set_visual_transform(
+            env,
+            env_id,
+            column_line_name,
+            (
+                visual_center_x,
+                visual_center_y + (line_index - columns / 2) * cell_size,
+                scene_cfg.grid_visual_height * 1.5,
+            ),
+            (float(rows), 1.0, 1.0) if column_line_visible else (0.0, 0.0, 0.0),
+        )
         _set_visual_visibility(env, env_id, column_line_name, column_line_visible)
 
 
@@ -324,7 +339,7 @@ def setup_task_grid(env: EraBenchEnv, env_ids: list[int]):
         _setup_success_positions(env, env_id, output_grid_cubes)
         _setup_grid_visuals(env, env_id, GridArea.INPUT, grid_pair.input)
         if load_task_command.is_current_pair_test(env_id):
-            _set_grid_visual_visibility(env, env_id, GridArea.OUTPUT, visible=False)
+            _hide_grid_visuals(env, env_id, GridArea.OUTPUT)
         else:
             _setup_grid_visuals(env, env_id, GridArea.OUTPUT, grid_pair.output)
 

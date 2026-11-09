@@ -1,9 +1,11 @@
-# ARC Embodied Architecture
+# ERA-Bench Sim Architecture
 
 ## Scope
 
-This analysis covers only the `tasks/manager_based/arc_embodied` task and the
-supporting components it directly uses: the ARC runner, `arc_utils`, common
+This analysis covers ERA-Bench Sim, the simulation suite of ERA-Bench that
+generates the ARC-Embodied dataset. It focuses on the
+`tasks/manager_based/arc_embodied` task and the supporting components it
+directly uses: the ARC runner, `arc_utils`, common
 recording/dataset utilities, and cuRobo. The `mirror` and generic `era_bench`
 task implementations are intentionally excluded.
 
@@ -54,7 +56,7 @@ ARC-specific additions and where they integrate with it.
   logging only observes its public state.
 - Scene assets and path/semantic lookup stay in `EraBenchSceneCfg`; reset events
   perform task-dependent scene writes.
-- Black grid backgrounds, white boundaries, and the violet reserve background
+- Dark grid backgrounds, gray boundaries, and the violet reserve background
   are visual-only scene assets. Reset events resize the grid backgrounds and
   suppress the output background for ARC test pairs so output dimensions are
   not exposed.
@@ -75,21 +77,21 @@ runner-side simulation loop. Isaac Lab internals, implementation methods,
 infrastructure dependencies, persistence technology, and internal buffers are
 deliberately omitted.
 
-![ARC Embodied simple architecture](arc_embodied_architecture.svg)
+![ERA-Bench Sim simple architecture](arc_embodied_architecture.svg)
 
 Editable Graphviz source: [`arc_embodied_architecture.dot`](arc_embodied_architecture.dot)
 
 Related runtime view:
-[`ARC Embodied Runtime Layers`](arc_embodied_runtime_layers.md)
+[`ERA-Bench Sim Runtime Layers`](arc_embodied_runtime_layers.md)
 
 Related data view:
-[`ARC Embodied High-Level Actions`](arc_embodied_high_level_actions.md)
+[`ARC-Embodied High-Level Actions`](arc_embodied_high_level_actions.md)
 
 Related benchmark view:
-[`ARC Embodied Task Selection`](arc_embodied_task_selection.md)
+[`ERA-Bench Sim Benchmark Task Selection`](arc_embodied_task_selection.md)
 
 Related scene view:
-[`ARC Embodied Scene Setup`](arc_embodied_scene_setup.md)
+[`ERA-Bench Sim Scene Setup`](arc_embodied_scene_setup.md)
 
 Related orchestration view:
-[`ARC Embodied Task Orchestration`](arc_embodied_task_orchestration.md)
+[`ERA-Bench Sim Task Orchestration`](arc_embodied_task_orchestration.md)

@@ -1,6 +1,6 @@
 digraph ArcEmbodiedSceneSetup {
   graph [
-    label="ARC Embodied — Scene Setup",
+    label="ERA-Bench Sim — Scene Setup",
     labelloc=t,
     fontsize=21,
     fontname="Arial",
@@ -56,7 +56,7 @@ digraph ArcEmbodiedSceneSetup {
   ];
 
   input [
-    label="INPUT GRID\nleft\n(0.00, −0.50, 0.00) m\n≤ 8 × 8\nblack background\nwhite lines",
+    label="INPUT GRID\nleft\n(0.00, −0.50, 0.00) m\n≤ 8 × 8\ndark background\ngray lines",
     fillcolor="#DBEAFE",
     color="#3B82F6",
     fixedsize=true,
@@ -106,7 +106,7 @@ digraph ArcEmbodiedSceneSetup {
   ];
 
   perspective_cam [
-    label="PERSPECTIVE CAMERA\ntable_cam\n(1.43, 0.00, 1.60) m\n352 × 256\nRGB / depth / semantics",
+    label="PERSPECTIVE CAMERA\ntable_cam\n(1.43, 0.00, 1.60) m\n336 × 252\nRGB / depth / semantics",
     fillcolor="#EDE9FE",
     color="#8B5CF6",
     fixedsize=true,

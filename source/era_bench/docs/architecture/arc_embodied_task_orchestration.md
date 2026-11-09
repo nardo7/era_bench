@@ -1,4 +1,4 @@
-# ARC Embodied Task Orchestration
+# ERA-Bench Sim Task Orchestration
 
 ## Responsibility
 
@@ -77,8 +77,7 @@ Therefore one pair can receive at most three attempts in one run:
 initial attempt → retry 1 → retry 2 → next failure exhausts the task
 ```
 
-Although the counter is named `retries_per_task`, it is reset whenever a new
-pair or task is assigned and therefore acts as the active pair's retry counter.
+The retry counter resets whenever a new pair or task is assigned.
 
 ## Episode outcome triggers
 
@@ -90,18 +89,17 @@ pair or task is assigned and therefore acts as the active pair's retry counter.
 | All output targets satisfied | Success | Matching-color cube distance at most `0.015 m`, enough cubes of each color, TCP more than `0.05 m` from the color targets, and TCP at least `0.15 m` onto the non-output side of the line from `table_cam` through output cell `(0, 0)` |
 | Gap in ordered output targets | Failure | Any reached–missing–reached pattern |
 
-### Outcome-order caveat
+### Termination order
 
-Termination terms are evaluated in configuration order and update
-`LoadTaskCommand` as side effects. The current order is timeout, reserve
-displacement, no progress, success, then output gap. If an early failure and
-success become true in the same simulation step, the later success term can
-overwrite the earlier `FAILED` status unless the final gap term also fails.
-The diagram below represents the intended single-outcome lifecycle.
+Termination terms update `LoadTaskCommand` in this order: timeout, reserve
+displacement, no progress, success, then output gap. When multiple terms match
+in one step, output-gap failure takes precedence over success; success takes
+precedence over the first three failure terms. The final command status
+determines the reset-time transition.
 
 ## Diagram
 
-![ARC Embodied task orchestration](arc_embodied_task_orchestration.svg)
+![ERA-Bench Sim task orchestration](arc_embodied_task_orchestration.svg)
 
 Editable Graphviz source:
 [`arc_embodied_task_orchestration.dot`](arc_embodied_task_orchestration.dot)

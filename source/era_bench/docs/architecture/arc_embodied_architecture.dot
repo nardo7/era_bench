@@ -1,6 +1,6 @@
 digraph ArcEmbodiedArchitecture {
   graph [
-    label="ARC Embodied — High-Level Architecture",
+    label="ERA-Bench Sim — High-Level Architecture",
     labelloc=t,
     fontsize=22,
     fontname="Arial",
@@ -95,7 +95,7 @@ digraph ArcEmbodiedArchitecture {
     penwidth=1.5;
 
     environment [
-      label="EraBenchEnv",
+      label="EraBenchEnv.step()\nreset terminated environments",
       fillcolor="#EDE9FE"
     ];
 
@@ -112,6 +112,11 @@ digraph ArcEmbodiedArchitecture {
       fillcolor="#DDD6FE"
     ];
 
+    runner_reset [
+      label="Reset runner state\nstate machine · watchdog · recovery",
+      fillcolor="#DDD6FE"
+    ];
+
     recovery [
       label="Recovery Policy",
       fillcolor="#DDD6FE"
@@ -120,7 +125,8 @@ digraph ArcEmbodiedArchitecture {
     { rank=same; environment; done; state_machine; recovery; }
 
     environment -> done [label="step result"];
-    done -> environment [label="yes: reset"];
+    done -> runner_reset [label="yes"];
+    runner_reset -> state_machine;
     done -> state_machine [label="no: observation"];
     state_machine -> recovery [label="desired action"];
     recovery -> environment [label="next action"];

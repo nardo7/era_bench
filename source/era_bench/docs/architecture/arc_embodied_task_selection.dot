@@ -1,6 +1,6 @@
 digraph ArcEmbodiedTaskSelection {
   graph [
-    label="ARC Embodied — ARC-AGI Benchmark Selection",
+    label="ERA-Bench Sim — ARC-AGI Benchmark Selection",
     labelloc=t,
     fontsize=21,
     fontname="Arial",
@@ -58,7 +58,7 @@ digraph ArcEmbodiedTaskSelection {
   ];
 
   selected [
-    label="ERA Bench ARC task set\n62 tasks\n50 training + 12 evaluation",
+    label="ERA-Bench Sim ARC task set\n62 tasks\n50 training + 12 evaluation",
     fillcolor="#D1FAE5",
     color="#059669",
     penwidth=1.5

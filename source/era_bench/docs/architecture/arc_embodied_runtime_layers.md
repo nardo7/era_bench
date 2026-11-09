@@ -1,4 +1,4 @@
-# ARC Embodied Runtime Layers
+# ERA-Bench Sim Runtime Layers
 
 ## Scope
 
@@ -82,24 +82,21 @@ The maximum episode duration is `320 s`, corresponding to:
 | Anti-aliasing | `DLAA` |
 | DL denoiser | enabled |
 
-`bounce_threshold_velocity` is assigned twice in the configuration; the later
-`0.01` assignment is the effective value.
-
 ## Diagram
 
-![ARC Embodied runtime layered architecture](arc_embodied_runtime_layers.svg)
+![ERA-Bench Sim runtime layered architecture](arc_embodied_runtime_layers.svg)
 
 Editable Graphviz source:
 [`arc_embodied_runtime_layers.dot`](arc_embodied_runtime_layers.dot)
 
 Related data view:
-[`ARC Embodied High-Level Actions`](arc_embodied_high_level_actions.md)
+[`ARC-Embodied High-Level Actions`](arc_embodied_high_level_actions.md)
 
 Related benchmark view:
-[`ARC Embodied Task Selection`](arc_embodied_task_selection.md)
+[`ERA-Bench Sim Benchmark Task Selection`](arc_embodied_task_selection.md)
 
 Related scene view:
-[`ARC Embodied Scene Setup`](arc_embodied_scene_setup.md)
+[`ERA-Bench Sim Scene Setup`](arc_embodied_scene_setup.md)
 
 Related orchestration view:
-[`ARC Embodied Task Orchestration`](arc_embodied_task_orchestration.md)
+[`ERA-Bench Sim Task Orchestration`](arc_embodied_task_orchestration.md)

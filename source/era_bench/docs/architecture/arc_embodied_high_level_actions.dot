@@ -1,6 +1,6 @@
 digraph ArcEmbodiedHighLevelActions {
   graph [
-    label="ARC Embodied — Stored High-Level Actions",
+    label="ARC-Embodied — Stored High-Level Actions",
     labelloc=t,
     fontsize=21,
     fontname="Arial",
