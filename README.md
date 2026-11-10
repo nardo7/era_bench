@@ -1,5 +1,7 @@
 # ERA-Bench
 
+![ERA-Bench Sim pipeline: conversion of a canonical ARC pair into a tabletop scene, episode execution, success checking, and recording.](source/era_bench/docs/assets/era_bench_arc_to_embodied_process.png)
+
 ERA-Bench is a project for embodied Abstract Reasoning Corpus (ARC-AGI-1)
 tasks. Its simulation suite, **ERA-Bench Sim**, generates the delivered
 **ARC-Embodied** dataset. ERA-Bench Sim turns a symbolic ARC input/output pair
@@ -50,6 +52,8 @@ provides ERA-Bench Sim and the dataset-generation pipeline.
 The ARC-Embodied HDF5 dataset is the main artifact. Most users can
 use the dataset directly and do not need to install Isaac Sim, Isaac
 Lab, or run this repository.
+
+![ERA-Bench Sim: final table-camera frames of a solved demonstration and test for ARC task 4cd1b7b2.](source/era_bench/docs/assets/era_bench_sim_front.png)
 
 Each successful episode can contain:
 
