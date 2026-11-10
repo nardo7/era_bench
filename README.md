@@ -59,9 +59,6 @@ Each successful episode can contain:
   and wrist cameras, plus an overhead RGB view;
 - a high-level manipulation timeline encoding grasp and place operations.
 
-See the [ARC-Embodied dataset reference](source/era_bench/docs/arc_embodied_dataset.md)
-for the HDF5 layout, split definitions, array shapes, and recording cadence.
-
 Dataset files are intentionally not tracked by Git. Place downloaded HDF5
 artifacts under `datasets/` when using the included inspection tools.
 

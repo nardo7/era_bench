@@ -60,8 +60,7 @@ that does not change the 62-task benchmark definition above.
 
 ## ARC-Embodied dataset coverage
 
-The ARC-Embodied dataset described in the
-[dataset reference](../arc_embodied_dataset.md) contains 62 task-view groups and
+The ARC-Embodied dataset contains 62 task-view groups and
 62 rule groups, covering the same 50 training and 12 evaluation tasks. Its 329
 successful episodes cover every original pair of those tasks exactly once:
 252 demonstration pairs and 77 test pairs. The stored test flags and symbolic
