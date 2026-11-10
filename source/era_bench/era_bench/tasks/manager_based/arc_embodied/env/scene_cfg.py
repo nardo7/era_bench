@@ -15,6 +15,11 @@ from arc_utils import ARC_COLOR_TO_COLOR, COLOR_RGB, COLOR_TO_ARC_COLOR, Colors
 from pxr import Semantics
 
 FRANKA_GRASP_CENTER_OFFSET = (0.0, 0.0, 0.1034)
+# Neutral albedos calibrated for separated rendered tones under the fixed scene lighting.
+GRID_LINE_LINEAR_RGB = (0.28125,) * 3
+GRAY_CUBE_LINEAR_RGB = (0.13339965338768311,) * 3
+# Brown albedo calibrated toward ARC #870C25 without changing the scene lighting.
+BROWN_CUBE_LINEAR_RGB = (0.0764226587464592, 0.000003590339183640074, 0.0020415281977606507)
 
 
 class GridArea(Enum):
@@ -79,15 +84,15 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     table_cam = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/table_cam",
         update_period=0.0,
-        height=256,
-        width=352,
+        height=252,
+        width=336,
         data_types=["rgb", "distance_to_image_plane", "semantic_segmentation"],
         depth_clipping_behavior="max",
         semantic_filter=["class"],
         colorize_semantic_segmentation=True,
         semantic_segmentation_mapping=SEMANTIC_SEGMENTATION_MAPPING,
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=25.0, focus_distance=2.3, horizontal_aperture=19.31, clipping_range=(0.1, 5.0)
+            focal_length=25.0, focus_distance=2.3, horizontal_aperture=18.43, clipping_range=(0.1, 5.0)
         ),
         offset=TiledCameraCfg.OffsetCfg(
             pos=(1.43, 0.0, 1.6), rot=(0.23021145, -0.66858260, -0.66858260, 0.23021145), convention="ros"
@@ -245,7 +250,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
     @property
     def grid_line_width(self) -> float:
         """Width of the visual grid boundaries in meters."""
-        return self.separation_distance / 4.0
+        return 0.005
 
     @property
     def grid_visual_height(self) -> float:
@@ -335,8 +340,16 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
             return self.input_grid_blue_cubes_amount
         return self.input_grid_cubes_amount_per_color
 
+    def get_cube_visual_color(self, color: Colors) -> tuple[float, float, float]:
+        """Return the rendered-material albedo, preserving the canonical ARC palette separately."""
+        if color is Colors.GREY:
+            return GRAY_CUBE_LINEAR_RGB
+        if color is Colors.BROWN:
+            return BROWN_CUBE_LINEAR_RGB
+        return COLOR_RGB[color]
+
     def _cube_visual_material(self, color: Colors) -> sim_utils.PreviewSurfaceCfg:
-        return sim_utils.PreviewSurfaceCfg(diffuse_color=COLOR_RGB[color])
+        return sim_utils.PreviewSurfaceCfg(diffuse_color=self.get_cube_visual_color(color), roughness=1.0)
 
     def get_cube_semantic_label(self, arc_color: int) -> str:
         """Return the color-aware semantic class used for an ARC cube."""
@@ -377,7 +390,9 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                             rigid_props=reserve_cube_rigid_props,
                             collision_props=reserve_cube_collision_props,
                             mass_props=reserve_cube_mass_props,
-                            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.2, 0.2)),
+                            visual_material=sim_utils.PreviewSurfaceCfg(
+                                diffuse_color=(0.2, 0.2, 0.2), roughness=1.0
+                            ),
                         ),
                     ),
                 )
@@ -408,7 +423,7 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                 )
 
     def initialize_grid_visuals(self) -> None:
-        """Create visual-only black grid backgrounds and white boundary-line pools."""
+        """Create visual-only black grid backgrounds and gray boundary-line pools."""
         cell_size = self.grid_cell_size
         visual_height = self.grid_visual_height
         for grid_area in GridArea:
@@ -425,7 +440,9 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                     spawn=sim_utils.CuboidCfg(
                         size=(cell_size, cell_size, visual_height),
                         semantic_tags=[("class", "grid_background")],
-                        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0)),
+                        visual_material=sim_utils.PreviewSurfaceCfg(
+                            diffuse_color=(0.0, 0.0, 0.0), roughness=1.0
+                        ),
                     ),
                 ),
             )
@@ -439,7 +456,9 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                         spawn=sim_utils.CuboidCfg(
                             size=(self.grid_line_width, cell_size, visual_height),
                             semantic_tags=[("class", "grid_line")],
-                            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 1.0)),
+                            visual_material=sim_utils.PreviewSurfaceCfg(
+                                diffuse_color=GRID_LINE_LINEAR_RGB, roughness=1.0
+                            ),
                         ),
                     ),
                 )
@@ -452,7 +471,9 @@ class EraBenchSceneCfg(InteractiveSceneCfg):
                         spawn=sim_utils.CuboidCfg(
                             size=(cell_size, self.grid_line_width, visual_height),
                             semantic_tags=[("class", "grid_line")],
-                            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 1.0)),
+                            visual_material=sim_utils.PreviewSurfaceCfg(
+                                diffuse_color=GRID_LINE_LINEAR_RGB, roughness=1.0
+                            ),
                         ),
                     ),
                 )

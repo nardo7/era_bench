@@ -1,6 +1,6 @@
 digraph ArcEmbodiedTaskOrchestration {
   graph [
-    label="ARC Embodied — Task Loading and Execution",
+    label="ERA-Bench Sim — Task Loading and Execution",
     labelloc=t,
     fontsize=21,
     fontname="Arial",
@@ -55,17 +55,16 @@ digraph ArcEmbodiedTaskOrchestration {
     color="#8B5CF6"
   ];
 
-  outcome [
-    label="Episode outcome?",
-    shape=diamond,
-    style=filled,
+  termination_order [
+    label="Evaluate termination terms in order\n1. Timeout / displacement / no progress → FAILED\n2. Success → COMPLETED + pair coverage\n3. Output gap → FAILED\nLast matching status update wins",
     fillcolor="#F8FAFC"
   ];
 
-  record_success [
-    label="Record successful pair coverage",
-    fillcolor="#D1FAE5",
-    color="#059669"
+  outcome [
+    label="Final command status?",
+    shape=diamond,
+    style=filled,
+    fillcolor="#F8FAFC"
   ];
 
   more_pairs [
@@ -107,18 +106,19 @@ digraph ArcEmbodiedTaskOrchestration {
     color="#3B82F6"
   ];
 
-  startup -> assign -> load -> run -> outcome;
+  startup -> assign -> load -> run -> termination_order -> outcome;
 
-  outcome -> record_success [label="success"];
-  record_success -> more_pairs;
+  outcome -> more_pairs [label="COMPLETED"];
   more_pairs -> next_pair [label="yes"];
   next_pair -> load;
   more_pairs -> task_finished [label="no · completed"];
 
-  outcome -> retries [label="failure"];
+  outcome -> retries [label="FAILED"];
   retries -> retry_pair [label="yes"];
   retry_pair -> load;
   retries -> task_finished [label="no · failed\nskip remaining pairs"];
+
+  outcome -> run [label="IN_PROGRESS"];
 
   task_finished -> next_task -> load;
 }

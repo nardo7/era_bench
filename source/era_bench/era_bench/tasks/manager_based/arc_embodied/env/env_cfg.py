@@ -270,7 +270,6 @@ class EraBenchEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render.antialiasing_mode = "DLAA"
         self.sim.render.enable_dl_denoiser = True
 
-        self.sim.physx.bounce_threshold_velocity = 0.2
         self.sim.physx.bounce_threshold_velocity = 0.01
         self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
         self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024

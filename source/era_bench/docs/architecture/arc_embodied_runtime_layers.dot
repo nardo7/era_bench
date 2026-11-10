@@ -1,6 +1,6 @@
 digraph ArcEmbodiedRuntimeLayers {
   graph [
-    label="ARC Embodied — Runtime Layered Architecture",
+    label="ERA-Bench Sim — Runtime Layered Architecture",
     labelloc=t,
     fontsize=22,
     fontname="Arial",

@@ -1,10 +1,11 @@
-# ARC Embodied Benchmark Task Selection
+# ERA-Bench Sim Benchmark Task Selection
 
 ## Benchmark definition
 
-`arc_utils.get_era_bench_tasks()` defines the ARC-AGI task set used by the
-benchmark. It starts with both bundled ARC-AGI splits and keeps a task only when
-every training and test pair satisfies all of these constraints:
+`arc_utils.get_era_bench_tasks()` defines the ARC-AGI task set used by
+ERA-Bench Sim to generate the ARC-Embodied dataset. It starts with both bundled
+ARC-AGI splits and keeps a task only when every training and test pair satisfies
+all of these constraints:
 
 1. Every input and output grid is at most `8 × 8`.
 2. Every output grid contains at most four distinct non-background colors.
@@ -57,17 +58,18 @@ result after sorting it by the maximum number of non-background output cells.
 A run may narrow the set further through `LoadTaskCommandCfg.tasks_ids`, but
 that does not change the 62-task benchmark definition above.
 
-## Recorded-artifact cross-check
+## ARC-Embodied dataset coverage
 
-The task IDs in the released dataset match this 62-task selection exactly. The
-artifact contains 62 task-view groups and 62 rule groups; the rule
-metadata identifies the same 50 training and 12 evaluation tasks. This checks
-benchmark membership, not complete pair coverage; scheduling and retry behavior
-remain defined by the current simulator source rather than by one recorded run.
+The ARC-Embodied dataset contains 62 task-view groups and
+62 rule groups, covering the same 50 training and 12 evaluation tasks. Its 329
+successful episodes cover every original pair of those tasks exactly once:
+252 demonstration pairs and 77 test pairs. The stored test flags and symbolic
+grids agree with the original ARC pairs. Scheduling and retry behavior remain
+defined by the simulator source rather than by one recorded run.
 
 ## Diagram
 
-![ARC Embodied benchmark task selection](arc_embodied_task_selection.svg)
+![ERA-Bench Sim benchmark task selection](arc_embodied_task_selection.svg)
 
 Editable Graphviz source:
 [`arc_embodied_task_selection.dot`](arc_embodied_task_selection.dot)

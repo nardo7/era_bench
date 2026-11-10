@@ -125,11 +125,49 @@ def test_grid_visuals_follow_raw_grid_shape_and_hide_unused_lines(monkeypatch) -
     assert transforms[0] == ("input_background", (-0.02, -0.52, 0.00025), (3.0, 4.0, 1.0))
     assert transforms[1] == ("input_row_0", (-0.11, -0.52, 0.00075), (1.0, 4.0, 1.0))
     assert transforms[2] == ("input_column_0", (-0.02, -0.64, 0.00075), (3.0, 1.0, 1.0))
+    assert ("input_row_4", (0.13, -0.52, 0.00075), (0.0, 0.0, 0.0)) in transforms
+    assert ("input_column_5", (-0.02, -0.34, 0.00075), (0.0, 0.0, 0.0)) in transforms
     assert ("input_background", True, 0) in visibility
     assert ("input_row_3", True, 0) in visibility
     assert ("input_row_4", False, 0) in visibility
     assert ("input_column_4", True, 0) in visibility
     assert ("input_column_5", False, 0) in visibility
+
+
+def test_hidden_grid_visuals_are_all_collapsed(monkeypatch) -> None:
+    scene_cfg = SimpleNamespace(
+        max_grid_size=1,
+        get_grid_background_name=lambda area: f"{area.value}_background",
+        get_grid_row_line_name=lambda area, index: f"{area.value}_row_{index}",
+        get_grid_column_line_name=lambda area, index: f"{area.value}_column_{index}",
+    )
+    env = SimpleNamespace(cfg=SimpleNamespace(scene=scene_cfg))
+    collapsed: list[tuple[str, int]] = []
+    visibility: list[tuple[str, bool, int]] = []
+    monkeypatch.setattr(
+        arc_events,
+        "_collapse_visual",
+        lambda _env, env_id, asset_name: collapsed.append((asset_name, env_id)),
+    )
+    monkeypatch.setattr(
+        arc_events,
+        "_set_visual_visibility",
+        lambda _env, env_id, asset_name, visible: visibility.append((asset_name, visible, env_id)),
+    )
+
+    arc_events._hide_grid_visuals(env, env_id=2, grid_area=GridArea.OUTPUT)
+
+    expected_names = {
+        "output_background",
+        "output_row_0",
+        "output_column_0",
+        "output_row_1",
+        "output_column_1",
+    }
+    assert {asset_name for asset_name, env_id in collapsed if env_id == 2} == expected_names
+    assert {(asset_name, env_id) for asset_name, visible, env_id in visibility if not visible} == {
+        (asset_name, 2) for asset_name in expected_names
+    }
 
 
 def test_grid_visual_transform_updates_a_live_usd_prim() -> None:

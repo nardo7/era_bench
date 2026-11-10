@@ -1,12 +1,16 @@
-# ERA Bench
+# ERA-Bench
 
-ERA Bench is an Isaac Lab simulation for embodied Abstract Reasoning Corpus
-(ARC-AGI-1) tasks. It turns a symbolic ARC input/output pair into a tabletop
-manipulation problem: a Franka robot observes the example grid, selects colored
-cubes from reserve stacks, and constructs the target output grid.
+![ERA-Bench Sim pipeline: conversion of a canonical ARC pair into a tabletop scene, episode execution, success checking, and recording.](source/era_bench/docs/assets/era_bench_arc_to_embodied_process.png)
 
-The repository is primarily the simulator and dataset-generation pipeline. It
-is **not an RL training repository**. The included benchmark policy is a
+ERA-Bench is a project for embodied Abstract Reasoning Corpus (ARC-AGI-1)
+tasks. Its simulation suite, **ERA-Bench Sim**, generates the delivered
+**ARC-Embodied** dataset. ERA-Bench Sim turns a symbolic ARC input/output pair
+into a tabletop manipulation problem: a Franka robot observes the example
+grid, selects colored cubes from reserve stacks, and constructs the target
+output grid.
+
+This repository provides ERA-Bench Sim and the ARC-Embodied dataset-generation
+pipeline. It is **not an RL training repository**. The included benchmark policy is a
 deterministic state machine backed by differential inverse kinematics and
 cuRobo motion planning. Because the environment uses Isaac Lab's manager-based
 interfaces, it can be extended with reward terms, agent configurations, and a
@@ -14,10 +18,10 @@ training runner if reinforcement learning is desired.
 
 ## Task source and citation
 
-ERA Bench does **not** introduce new abstract-reasoning tasks. It uses the
+ERA-Bench does **not** introduce new abstract-reasoning tasks. It uses the
 original ARC-AGI-1 task corpus, retaining its task IDs and input/output
 examples while expressing each output grid as a physical cube-manipulation
-episode. Cite the original ARC benchmark when using ERA Bench:
+episode. Cite the original ARC benchmark when using ERA-Bench:
 
 > François Chollet. 2019. *On the Measure of Intelligence.* arXiv:1911.01547
 > [cs.AI]. https://doi.org/10.48550/arXiv.1911.01547
@@ -38,16 +42,18 @@ task corpus.
 
 ## Evaluation benchmark
 
-The companion [ERA Bench Evaluation](https://github.com/nardo7/era_bench_evaluation)
-repository contains the benchmark implementation for this dataset. Use that
-repository to evaluate models on ERA Bench data; this repository provides the
-Isaac Lab simulation and dataset-generation pipeline.
+The companion [ERA-Bench Evaluation](https://github.com/nardo7/era_bench_evaluation)
+repository contains the benchmark implementation for ARC-Embodied. Use that
+repository to evaluate models on the ARC-Embodied dataset; this repository
+provides ERA-Bench Sim and the dataset-generation pipeline.
 
 ## Start with the dataset
 
-The generated ERA Bench HDF5 dataset is the main artifact. Most users should
-use the released dataset directly and do not need to install Isaac Sim, Isaac
+The ARC-Embodied HDF5 dataset is the main artifact. Most users can
+use the dataset directly and do not need to install Isaac Sim, Isaac
 Lab, or run this repository.
+
+![ERA-Bench Sim: final table-camera frames of a solved demonstration and test for ARC task 4cd1b7b2.](source/era_bench/docs/assets/era_bench_sim_front.png)
 
 Each successful episode can contain:
 
@@ -58,15 +64,15 @@ Each successful episode can contain:
 - a high-level manipulation timeline encoding grasp and place operations.
 
 Dataset files are intentionally not tracked by Git. Place downloaded HDF5
-artifacts under `datasets/` when using the included inspection tools. The
-default filename used by those tools is `datasets/era_bench.hdf5`.
+artifacts under `datasets/` when using the included inspection tools.
 
 For example, to export table-camera RGB observations as MP4 files without
 starting Isaac Sim:
 
 ```bash
 python scripts/dataset/create_videos.py \
-    --dataset datasets/era_bench.hdf5
+    --dataset datasets/arc_embodied.hdf5 \
+    --fps 20
 ```
 
 The command requires Python packages for HDF5 and video handling (`h5py`,
@@ -74,10 +80,13 @@ The command requires Python packages for HDF5 and video handling (`h5py`,
 `--pair` to export only one ARC task or pair, and `--data-type` to select RGB,
 depth, or semantic segmentation.
 
-## Simulation overview
+The recording cadence is `20 Hz`. The example passes `--fps 20` to preserve
+that timing; the export tool's default playback rate is `30 fps`.
 
-The registered environment is `ARC-Embodied-Era-Bench-v0`. A simulation run
-combines:
+## ERA-Bench Sim overview
+
+ERA-Bench Sim uses the registered environment `ARC-Embodied-Era-Bench-v0`.
+A simulation run combines:
 
 - an Isaac Lab manager-based environment and ARC-specific scene;
 - a Franka Panda robot, input/output grids, reserve cube stacks, and three
@@ -106,7 +115,7 @@ Requirements:
 - the Isaac Lab Mimic and cuRobo dependencies;
 - Git with submodule support.
 
-Clone ERA Bench and initialize its `arc_utils` dependency:
+Clone the ERA-Bench Sim repository and initialize its `arc_utils` dependency:
 
 ```bash
 git clone --recurse-submodules https://github.com/nardo7/era_bench.git
@@ -148,7 +157,7 @@ Run a short headless simulation and write to a new smoke-test dataset:
 ```
 
 This is a simulator smoke test, not a command for reproducing the complete
-released dataset. Full generation requires substantially longer runs and
+ARC-Embodied dataset. Full generation requires substantially longer runs and
 sufficient storage for camera observations. By default, an existing dataset is
 opened in append/resume mode. Pass `--overwrite_dataset` only when you
 intentionally want to replace the selected output file.
@@ -187,7 +196,7 @@ The architecture documents provide deeper views of the
 [runtime layers](source/era_bench/docs/architecture/arc_embodied_runtime_layers.md),
 and [recorded high-level actions](source/era_bench/docs/architecture/arc_embodied_high_level_actions.md).
 
-## Extending ERA Bench to reinforcement learning
+## Extending ERA-Bench Sim to reinforcement learning
 
 The environment already exposes the main Isaac Lab integration points needed
 by an RL workflow: action terms, observation groups, reset events, termination

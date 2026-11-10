@@ -124,10 +124,10 @@ class EpisodeVideoRecorder(RecorderTerm):
 
             # encode MP4 into an in-memory buffer
             buf = io.BytesIO()
-            # Match Qwen3-VL's 32-pixel spatial factor. Camera dimensions such
-            # as 352x256 are already divisible by 32, so no padding is applied.
+            # Camera dimensions are even, as required by libx264's default
+            # pixel format, so preserve their resolution without rescaling.
             writer = imageio.get_writer(
-                buf, format="mp4", fps=self._fps, codec="libx264", quality=8, macro_block_size=32
+                buf, format="mp4", fps=self._fps, codec="libx264", quality=8, macro_block_size=2
             )
             for frame in frames_np:
                 writer.append_data(frame)
